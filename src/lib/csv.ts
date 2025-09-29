@@ -198,6 +198,10 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
   const order: string[] = [];
   const shapesSeen: Set<"set" | "pair"> = new Set();
   let chunkedGroupCount = 0;
+  let pendingCountGroup: MatchingGroup | null = null;
+  let pendingCountExpected: number | null = null;
+  let pendingCountIdentifier: string | null = null;
+  let countGroupIndex = 0;
 
   type PendingSinglePair = {
     pair: MatchingPair;
@@ -280,6 +284,7 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
     const source = safeString(row.source);
     const license = safeString(row.license);
     const setId = safeString(row.setId ?? row.group ?? "");
+    const declaredCount = parseCount(row.count);
 
     const leftOptions = splitList(leftColumn);
     const rightOptions = splitList(rightColumn);
@@ -358,6 +363,76 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       continue;
     }
 
+    if (declaredCount !== null) {
+      if (
+        !pendingCountGroup ||
+        (pendingCountExpected !== null && pendingCountGroup.pairs.length >= pendingCountExpected)
+      ) {
+        if (
+          pendingCountGroup &&
+          pendingCountExpected !== null &&
+          pendingCountGroup.pairs.length > 0 &&
+          pendingCountGroup.pairs.length !== pendingCountExpected
+        ) {
+          collect.push({
+            severity: "warning",
+            message: `Matching set ${pendingCountIdentifier ?? "(count)"} expected ${pendingCountExpected} pairs but found ${pendingCountGroup.pairs.length}.`,
+          });
+        }
+
+        countGroupIndex += 1;
+        pendingCountIdentifier = `count-${countGroupIndex}`;
+        pendingCountGroup = {
+          pairs: [],
+          source: source || undefined,
+          license: license || undefined,
+          level: level || undefined,
+          rawKeys: [],
+        };
+        pendingCountExpected = declaredCount;
+      } else if (
+        pendingCountExpected !== null &&
+        declaredCount !== pendingCountExpected
+      ) {
+        collect.push({
+          severity: "warning",
+          message: `Matching row ${index + 1} declared count ${declaredCount} but current set expects ${pendingCountExpected}.`,
+        });
+      }
+
+      if (pendingCountGroup) {
+        pendingCountGroup.pairs.push(pair);
+        if (source) {
+          pendingCountGroup.source = pendingCountGroup.source || source;
+        }
+        if (license) {
+          pendingCountGroup.license = pendingCountGroup.license || license;
+        }
+        if (level) {
+          pendingCountGroup.level = pendingCountGroup.level || level;
+        }
+        pendingCountGroup.rawKeys.push(`${pair.left}->${pair.right}`);
+
+        if (
+          pendingCountExpected !== null &&
+          pendingCountGroup.pairs.length === pendingCountExpected
+        ) {
+          const item = normalizeMatchingSet(
+            pendingCountIdentifier ?? `count-${countGroupIndex}`,
+            pendingCountGroup,
+            collect,
+          );
+          if (item) {
+            items.push(item);
+          }
+          pendingCountGroup = null;
+          pendingCountExpected = null;
+          pendingCountIdentifier = null;
+        }
+        continue;
+      }
+    }
+
     singlePairs.push({
       pair,
       source: source || undefined,
@@ -404,6 +479,17 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
         items.push(item);
         chunkedGroupCount += 1;
       }
+    });
+  }
+
+  if (
+    pendingCountGroup &&
+    pendingCountExpected !== null &&
+    pendingCountGroup.pairs.length > 0
+  ) {
+    collect.push({
+      severity: "warning",
+      message: `Matching set ${pendingCountIdentifier ?? "(count)"} expected ${pendingCountExpected} pairs but encountered end of file after ${pendingCountGroup.pairs.length}.`,
     });
   }
 
