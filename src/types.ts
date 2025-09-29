@@ -63,3 +63,9 @@ export interface InspectorFilters {
   minLength: number | null;
   maxLength: number | null;
 }
+
+export interface InspectorStateSnapshot {
+  filters: InspectorFilters;
+  hiddenIds: string[];
+  isOpen: boolean;
+}

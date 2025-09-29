@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadExercises, type PackIssue } from "../lib/csv";
 import { applyInspectorFilters } from "../lib/inspector";
 import {
+  getDefaultInspectorFilters,
+  getDefaultInspectorState,
   getDefaultSettings,
+  loadInspectorState,
   loadProgress,
   loadSettings,
   recordProgress,
   resetProgress,
+  saveInspectorState,
   saveSettings,
 } from "../lib/storage";
 import type {
@@ -24,11 +28,7 @@ import { Scramble } from "../components/Scramble";
 import { PackInspector } from "../components/PackInspector";
 
 const DEFAULT_SETTINGS = getDefaultSettings();
-const DEFAULT_FILTERS: InspectorFilters = {
-  contains: "",
-  minLength: null,
-  maxLength: null,
-};
+const DEFAULT_INSPECTOR_STATE = getDefaultInspectorState();
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 
@@ -51,10 +51,12 @@ export function Home() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [packIssues, setPackIssues] = useState<PackIssue[]>([]);
   const [rowCount, setRowCount] = useState(0);
-  const [inspectorFilters, setInspectorFilters] = useState<InspectorFilters>(() => ({
-    ...DEFAULT_FILTERS,
-  }));
+  const [inspectorFilters, setInspectorFilters] = useState<InspectorFilters>(() =>
+    getDefaultInspectorFilters(),
+  );
   const [hiddenItemIds, setHiddenItemIds] = useState<Set<string>>(() => new Set());
+  const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(DEFAULT_INSPECTOR_STATE.isOpen);
+  const inspectorHydratedRef = useRef(false);
 
   useEffect(() => {
     setSettings(loadSettings());
@@ -100,8 +102,12 @@ export function Home() {
   }, [settings.level, settings.exerciseType]);
 
   useEffect(() => {
-    setInspectorFilters({ ...DEFAULT_FILTERS });
-    setHiddenItemIds(new Set());
+    inspectorHydratedRef.current = false;
+    const persisted = loadInspectorState(settings.level, settings.exerciseType);
+    setInspectorFilters({ ...persisted.filters });
+    setHiddenItemIds(new Set(persisted.hiddenIds));
+    setIsInspectorOpen(persisted.isOpen);
+    inspectorHydratedRef.current = true;
   }, [settings.level, settings.exerciseType]);
 
   const filteredItems = useMemo(
@@ -136,6 +142,25 @@ export function Home() {
     setDisplayItems(preparedItems);
     setCurrentIndex(0);
   }, [preparedItems]);
+
+  useEffect(() => {
+    setHiddenItemIds((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const validIds = new Set(items.map((item) => item.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (validIds.has(id)) {
+          next.add(id);
+        } else {
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [items]);
 
   const currentItem = displayItems[currentIndex];
 
@@ -198,7 +223,7 @@ export function Home() {
   }, []);
 
   const handleResetFilters = useCallback(() => {
-    setInspectorFilters({ ...DEFAULT_FILTERS });
+    setInspectorFilters(getDefaultInspectorFilters());
   }, []);
 
   const handleToggleHidden = useCallback((itemId: string) => {
@@ -216,6 +241,28 @@ export function Home() {
   const handleClearHidden = useCallback(() => {
     setHiddenItemIds(new Set());
   }, []);
+
+  const handleToggleInspectorOpen = useCallback(() => {
+    setIsInspectorOpen((prev) => !prev);
+  }, []);
+
+  useEffect(() => {
+    if (!inspectorHydratedRef.current) {
+      return;
+    }
+
+    saveInspectorState(settings.level, settings.exerciseType, {
+      filters: inspectorFilters,
+      hiddenIds: Array.from(hiddenItemIds),
+      isOpen: isInspectorOpen,
+    });
+  }, [
+    inspectorFilters,
+    hiddenItemIds,
+    isInspectorOpen,
+    settings.level,
+    settings.exerciseType,
+  ]);
 
   useEffect(() => {
     if (settings.exerciseType !== "matching") {
@@ -344,6 +391,8 @@ export function Home() {
         onResetFilters={handleResetFilters}
         onToggleHidden={handleToggleHidden}
         onClearHidden={handleClearHidden}
+        isOpen={isInspectorOpen}
+        onToggleOpen={handleToggleInspectorOpen}
         settings={settings}
         onSettingsChange={handleSettingsChange}
         level={settings.level}

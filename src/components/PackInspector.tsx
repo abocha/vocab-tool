@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import type {
   AppSettings,
   ExerciseItem,
@@ -8,6 +8,20 @@ import type {
 } from "../types";
 import { MAX_ITEMS_CHOICES } from "../lib/constants";
 import { buildCsvExport, itemLength, itemToPlainText } from "../lib/inspector";
+
+const TYPE_LABELS: Record<ExerciseType, string> = {
+  gapfill: "Gap Fill",
+  matching: "Matching",
+  mcq: "Multiple Choice",
+  scramble: "Scramble",
+};
+
+const PACK_FILENAMES: Record<ExerciseType, string> = {
+  gapfill: "gapfill.csv",
+  matching: "matching.csv",
+  mcq: "mcq.csv",
+  scramble: "scramble.csv",
+};
 
 function parseLengthValue(value: string): number | null {
   if (value.trim() === "") {
@@ -30,6 +44,8 @@ interface PackInspectorProps {
   onResetFilters: () => void;
   onToggleHidden: (itemId: string) => void;
   onClearHidden: () => void;
+  isOpen: boolean;
+  onToggleOpen: () => void;
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
   level: Level;
@@ -77,18 +93,22 @@ export function PackInspector({
   onResetFilters,
   onToggleHidden,
   onClearHidden,
+  isOpen,
+  onToggleOpen,
   settings,
   onSettingsChange,
   level,
   exerciseType,
   rowCount,
 }: PackInspectorProps) {
-  const [isOpen, setIsOpen] = useState(true);
 
   const hiddenItems = useMemo(
     () => allItems.filter((item) => hiddenIds.has(item.id)),
     [allItems, hiddenIds],
   );
+
+  const datasetLabel = `${level} · ${TYPE_LABELS[exerciseType]}`;
+  const sourcePath = `packs/${level}/${PACK_FILENAMES[exerciseType]}`;
 
   const handleFilterChange = <Key extends keyof InspectorFilters>(
     key: Key,
@@ -122,6 +142,9 @@ export function PackInspector({
         <div>
           <h2 id="pack-inspector-heading">Pack Inspector</h2>
           <p className="pack-inspector__meta" aria-live="polite">
+            Dataset: {datasetLabel} → <code>{sourcePath}</code>
+          </p>
+          <p className="pack-inspector__meta" aria-live="polite">
             Parsed {rowCount} rows → {allItems.length} valid items. After filters: {filteredCount}. Displayed:
             {` ${visibleCount}`}.
           </p>
@@ -130,7 +153,7 @@ export function PackInspector({
           <button
             type="button"
             className="pack-inspector__toggle"
-            onClick={() => setIsOpen((prev) => !prev)}
+            onClick={onToggleOpen}
             aria-expanded={isOpen}
             aria-controls="pack-inspector-panel"
           >
