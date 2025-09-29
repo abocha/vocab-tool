@@ -59,7 +59,7 @@ async function main() {
   const level = options.get("--level") ?? "A2";
   const outputFile = options.get("--out")
     ? path.resolve(options.get("--out"))
-    : resolveInput(__dirname, `../cards/draft_cards_${level.toLowerCase()}.jsonl`);
+    : resolveInput(__dirname, "../cards/draft_cards.jsonl");
 
   const freqFile = resolveInput(corpusRoot, "data/freq_lemmas.csv");
   const bigramsFile = resolveInput(corpusRoot, "data/bigrams.csv");
@@ -73,11 +73,12 @@ async function main() {
   const cards = await createDraftCards({ freqFile, bigramsFile, sentencesFile });
 
   if (cards.length === 0) {
-    console.log("No cards generated yet (stub). TODO: implement scoring heuristics.");
+    console.log("No cards generated yet (stub). TODO: implement heuristics from docs/07.");
   }
 
   await writeCards(outputFile, cards);
   console.log(`Draft cards written to ${outputFile}`);
+  console.log("Summary: TODO — emit counts, coverage, and Zipf stats once adapter is implemented.");
 }
 
 main().catch((error) => {

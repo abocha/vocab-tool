@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "prepare:packs": "node ./scripts/prepare-packs.js",
     "cards:draft": "node ./scripts/build-cards-from-corpus.js",
-    "packs:from-cards": "node ./scripts/build-packs-from-cards.js"
+    "packs:from-cards": "node ./scripts/build-packs-from-cards.js",
+    "packs:validate": "node ./scripts/validate-packs.js"
   },
   "dependencies": {
     "papaparse": "^5.5.3",

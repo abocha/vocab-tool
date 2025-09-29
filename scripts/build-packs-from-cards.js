@@ -98,6 +98,7 @@ async function main() {
   await writeCsv(path.join(outputDir, "scramble.csv"), "level,type,prompt,answer,source,license", scrambleRows);
 
   console.log(`CSV packs written to ${outputDir} (stub outputs empty until builders are implemented).`);
+  console.log("Summary: TODO — report per-exercise counts and TODO fallbacks once builders exist.");
 }
 
 main().catch((error) => {

@@ -43,12 +43,12 @@ Each CSV must include the headers defined by the corpus pipeline (see `/docs/03-
 
 ### Matching data shapes
 
-The Matching exercise now accepts both CSV variants:
+The Matching exercise now accepts both CSV variants and normalises them into a single in-memory structure:
 
-- **Set-per-row** — single row with pipe-delimited `left`/`right` lists.
-- **Pair-per-row** — one pair per row; rows are grouped by `setId`, otherwise by contiguous chunks using the `count` column.
+- **Set-per-row** — single row with pipe-delimited `left`/`right` lists. The loader honours the declared `count` column and surfaces mismatches.
+- **Pair-per-row** — one pair per row; rows are grouped by `setId` when present, otherwise chunked deterministically so the UI still renders sets.
 
-Rows with inconsistent lengths or missing fields are skipped, and a concise warning is logged to the console/UI.
+When both shapes appear in the same file, the inspector banner calls it out so you can review the grouping. Learners still receive the same scoring UX: set score, overall % score, and an explicit note if the `Pairs per Set` limit sampled a subset of the available pairs.
 
 ### Copying or Sampling Packs
 
@@ -68,11 +68,12 @@ Flags:
 
 Open the “Pack Inspector” panel below the exercise view to curate the currently loaded level + exercise:
 
-- Filter by substring and length range, hide/restore individual items, and see live counts (parsed → filtered → displayed).
-- Toggle Shuffle/Max Items in context; the curated list immediately updates the learner view.
-- Export the curated subset to CSV directly in the browser. The download preserves the original schema for each exercise type.
+- Filter by substring and length range, hide/restore individual items, and see live counts (parsed → filtered → displayed). Filters + hidden IDs persist per `(level, type)` in `localStorage` for quick revisits.
+- Toggle Shuffle, Max Items, and (for matching packs) the `Pairs per Set` limit without leaving the inspector. These settings drive the learner view immediately and also persist.
+- Export the curated subset to CSV directly in the browser. The download preserves the original schema for each exercise type so the file can replace the original pack for a session.
+- Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card.
 
-The banner above the exercise also surfaces parse warnings (missing columns, skipped rows) so teachers can catch malformed data quickly.
+The top-of-page banner also surfaces parse warnings and errors (missing columns, skipped rows, empty files) so malformed packs never crash the app—the UI simply falls back to a friendly empty state.
 
 ## Available Scripts
 
@@ -80,8 +81,9 @@ The banner above the exercise also surfaces parse warnings (missing columns, ski
 - `npm run build` — type-check and produce a static build in `dist/`.
 - `npm run preview` — preview the production build locally.
 - `npm run prepare:packs` — copy/sample CSV packs (see above).
-- `npm run cards:draft` — **stub** CLI to adapt corpus CSVs into `cards/draft_cards_<level>.jsonl` (Phase 2 groundwork).
-- `npm run packs:from-cards` — **stub** CLI to emit exercise CSVs from card JSONL files.
+- `npm run cards:draft` — **stub** CLI to adapt corpus CSVs into `cards/draft_cards.jsonl` (see docs/07-adapter-corpus-to-cards).
+- `npm run packs:from-cards` — **stub** CLI to emit exercise CSVs from card JSONL files (see docs/08-exercise-builders-from-cards.md).
+- `npm run packs:validate` — **stub** CLI that walks packs, prints row counts, and reminds you to run the heuristics from docs/09-validators.md once implemented.
 
 ## Deploying
 
