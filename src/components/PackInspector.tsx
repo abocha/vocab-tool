@@ -6,6 +6,7 @@ import type {
   InspectorFilters,
   Level,
 } from "../types";
+import type { PackIssue } from "../lib/csv";
 import { MAX_ITEMS_CHOICES } from "../lib/constants";
 import { buildCsvExport, itemLength, itemToPlainText } from "../lib/inspector";
 
@@ -46,6 +47,7 @@ interface PackInspectorProps {
   onClearHidden: () => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  issues: PackIssue[];
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
   level: Level;
@@ -95,6 +97,7 @@ export function PackInspector({
   onClearHidden,
   isOpen,
   onToggleOpen,
+  issues,
   settings,
   onSettingsChange,
   level,
@@ -109,6 +112,29 @@ export function PackInspector({
 
   const datasetLabel = `${level} · ${TYPE_LABELS[exerciseType]}`;
   const sourcePath = `packs/${level}/${PACK_FILENAMES[exerciseType]}`;
+  const warningIssues = useMemo(
+    () => issues.filter((issue) => issue.severity === "warning"),
+    [issues],
+  );
+  const errorIssues = useMemo(
+    () => issues.filter((issue) => issue.severity === "error"),
+    [issues],
+  );
+  const errorCount = errorIssues.length;
+  const warningCount = warningIssues.length;
+  const diagnosticsSummary = useMemo(() => {
+    if (issues.length === 0) {
+      return "";
+    }
+    const parts: string[] = [];
+    if (errorCount > 0) {
+      parts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
+    }
+    if (warningCount > 0) {
+      parts.push(`${warningCount} warning${warningCount === 1 ? "" : "s"}`);
+    }
+    return parts.join(", ");
+  }, [errorCount, warningCount, issues.length]);
 
   const handleFilterChange = <Key extends keyof InspectorFilters>(
     key: Key,
@@ -144,6 +170,11 @@ export function PackInspector({
           <p className="pack-inspector__meta" aria-live="polite">
             Dataset: {datasetLabel} → <code>{sourcePath}</code>
           </p>
+          {diagnosticsSummary && (
+            <p className="pack-inspector__meta" aria-live="polite">
+              Diagnostics: {diagnosticsSummary}
+            </p>
+          )}
           <p className="pack-inspector__meta" aria-live="polite">
             Parsed {rowCount} rows → {allItems.length} valid items. After filters: {filteredCount}. Displayed:
             {` ${visibleCount}`}.
@@ -163,6 +194,31 @@ export function PackInspector({
       </header>
       {isOpen && (
         <div id="pack-inspector-panel" className="pack-inspector__panel" aria-labelledby="pack-inspector-heading">
+          {issues.length > 0 && (
+            <section className="pack-inspector__diagnostics" aria-label="Pack diagnostics">
+              <h3>Diagnostics</h3>
+              <ul>
+                {errorIssues.map((issue) => (
+                  <li key={`diagnostic-error-${issue.message}`} className="pack-inspector__diagnostics-item pack-inspector__diagnostics-item--error">
+                    <span className="pack-inspector__diagnostic-tag">Error</span>
+                    <span>
+                      {issue.message}
+                      {issue.hint ? ` — ${issue.hint}` : ""}
+                    </span>
+                  </li>
+                ))}
+                {warningIssues.map((issue) => (
+                  <li key={`diagnostic-warning-${issue.message}`} className="pack-inspector__diagnostics-item pack-inspector__diagnostics-item--warning">
+                    <span className="pack-inspector__diagnostic-tag">Warning</span>
+                    <span>
+                      {issue.message}
+                      {issue.hint ? ` — ${issue.hint}` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <div className="pack-inspector__controls">
             <fieldset>
               <legend>Filters</legend>

@@ -18,6 +18,13 @@ const FILE_MAP: Record<ExerciseType, string> = {
   scramble: "scramble.csv",
 };
 
+const REQUIRED_HEADERS: Record<ExerciseType, string[]> = {
+  gapfill: ["level", "type", "prompt", "answer"],
+  matching: ["level", "type", "left", "right"],
+  mcq: ["type", "prompt", "options", "answer"],
+  scramble: ["level", "type", "prompt", "answer"],
+};
+
 function safeString(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -68,6 +75,34 @@ function createIssueCollector() {
   };
 }
 
+function validateHeaders(
+  headers: string[] | null,
+  type: ExerciseType,
+  fileName: string,
+  collect: ReturnType<typeof createIssueCollector>,
+) {
+  if (!headers || headers.length === 0) {
+    collect.push({
+      severity: "error",
+      message: `${fileName} is missing a header row.`,
+      hint: "Ensure the CSV includes column names as the first row.",
+    });
+    return;
+  }
+
+  const required = REQUIRED_HEADERS[type] ?? [];
+  const headerSet = new Set(headers.map((header) => header.trim().toLowerCase()));
+  const missing = required.filter((column) => !headerSet.has(column));
+
+  if (missing.length > 0) {
+    collect.push({
+      severity: "error",
+      message: `${fileName} is missing required column(s): ${missing.join(", ")}.`,
+      hint: "See docs/03-csv-pack-spec.md for the expected schema.",
+    });
+  }
+}
+
 function parseCount(value: unknown): number | null {
   const raw = safeString(value);
   if (!raw) {
@@ -83,6 +118,15 @@ function parseCount(value: unknown): number | null {
 function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssueCollector>): GapFillItem[] {
   const items: GapFillItem[] = [];
   rows.forEach((row, index) => {
+    const typeValue = safeString(row.type);
+    if (typeValue && typeValue.toLowerCase() !== "gapfill") {
+      collect.push({
+        severity: "warning",
+        message: `Skipped gap-fill row ${index + 1} due to unexpected type value '${typeValue}'.`,
+      });
+      return;
+    }
+
     const prompt = safeString(row.prompt);
     const answer = safeString(row.answer);
     if (!prompt || !answer) {
@@ -92,6 +136,15 @@ function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssue
       });
       return;
     }
+
+    const levelRaw = safeString(row.level);
+    if (!levelRaw) {
+      collect.push({
+        severity: "warning",
+        message: `Gap-fill row ${index + 1} is missing a level value.`,
+      });
+    }
+
     const id = createItemId("gapfill", `${prompt}|${answer}`);
     items.push({
       id,
@@ -100,7 +153,7 @@ function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssue
       answer,
       source: safeString(row.source),
       license: safeString(row.license),
-      level: safeString(row.level) as Level,
+      level: levelRaw ? (levelRaw as Level) : undefined,
     });
   });
   return items;
@@ -207,7 +260,23 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       continue;
     }
 
-    const level = safeString(row.level) as Level;
+    const typeValue = safeString(row.type);
+    if (typeValue && typeValue.toLowerCase() !== "matching") {
+      collect.push({
+        severity: "warning",
+        message: `Skipped matching row ${index + 1} due to unexpected type value '${typeValue}'.`,
+      });
+      continue;
+    }
+
+    const levelRaw = safeString(row.level);
+    if (!levelRaw) {
+      collect.push({
+        severity: "warning",
+        message: `Matching row ${index + 1} is missing a level value.`,
+      });
+    }
+    const level = levelRaw ? (levelRaw as Level) : undefined;
     const source = safeString(row.source);
     const license = safeString(row.license);
     const setId = safeString(row.setId ?? row.group ?? "");
@@ -371,6 +440,15 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
 function buildMcqRows(rows: RawRow[], collect: ReturnType<typeof createIssueCollector>): McqItem[] {
   const items: McqItem[] = [];
   rows.forEach((row, index) => {
+    const typeValue = safeString(row.type);
+    if (typeValue && typeValue.toLowerCase() !== "mcq") {
+      collect.push({
+        severity: "warning",
+        message: `Skipped MCQ row ${index + 1} due to unexpected type value '${typeValue}'.`,
+      });
+      return;
+    }
+
     const prompt = safeString(row.prompt);
     const optionsRaw = safeString(row.options);
     const answer = safeString(row.answer);
@@ -382,12 +460,18 @@ function buildMcqRows(rows: RawRow[], collect: ReturnType<typeof createIssueColl
       return;
     }
     const options = splitList(optionsRaw);
-    if (options.length === 0) {
+    if (options.length < 2) {
       collect.push({
         severity: "warning",
-        message: `Skipped MCQ row ${index + 1} because options could not be parsed.`,
+        message: `Skipped MCQ row ${index + 1} because it has fewer than two options.`,
       });
       return;
+    }
+    if (!options.includes(answer)) {
+      collect.push({
+        severity: "warning",
+        message: `MCQ row ${index + 1} answer '${answer}' is not present in options.`,
+      });
     }
     const id = createItemId("mcq", `${prompt}|${answer}`);
     items.push({
@@ -409,6 +493,15 @@ function buildScrambleRows(
 ): ScrambleItem[] {
   const items: ScrambleItem[] = [];
   rows.forEach((row, index) => {
+    const typeValue = safeString(row.type);
+    if (typeValue && typeValue.toLowerCase() !== "scramble") {
+      collect.push({
+        severity: "warning",
+        message: `Skipped scramble row ${index + 1} due to unexpected type value '${typeValue}'.`,
+      });
+      return;
+    }
+
     const prompt = safeString(row.prompt);
     const answer = safeString(row.answer);
     if (!prompt || !answer) {
@@ -418,6 +511,13 @@ function buildScrambleRows(
       });
       return;
     }
+    const levelRaw = safeString(row.level);
+    if (!levelRaw) {
+      collect.push({
+        severity: "warning",
+        message: `Scramble row ${index + 1} is missing a level value.`,
+      });
+    }
     const id = createItemId("scramble", `${prompt}|${answer}`);
     items.push({
       id,
@@ -426,7 +526,7 @@ function buildScrambleRows(
       answer,
       source: safeString(row.source),
       license: safeString(row.license),
-      level: safeString(row.level) as Level,
+      level: levelRaw ? (levelRaw as Level) : undefined,
     });
   });
   return items;
@@ -450,6 +550,7 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
     const rows: RawRow[] = [];
     const parseIssues: ParseError[] = [];
     const collector = createIssueCollector();
+    let headers: string[] | null = null;
 
     const config: ParseRemoteConfig<RawRow> = {
       download: true,
@@ -458,12 +559,27 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
       worker: true,
       chunkSize: 64 * 1024,
       chunk: (results: ParseResult<RawRow>) => {
+        if (!headers && results.meta && Array.isArray(results.meta.fields)) {
+          headers = results.meta.fields.map((field) =>
+            typeof field === "string" ? field.trim() : "",
+          );
+        }
         rows.push(...results.data);
         if (results.errors && results.errors.length > 0) {
           parseIssues.push(...results.errors);
         }
       },
       complete: () => {
+        validateHeaders(headers, type, fileName, collector);
+
+        if (rows.length === 0) {
+          collector.push({
+            severity: "warning",
+            message: `${fileName} contains no data rows.`,
+            hint: "Populate the CSV or verify the export path.",
+          });
+        }
+
         if (parseIssues.length > 0) {
           collector.push({
             severity: "warning",
@@ -488,6 +604,14 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
             break;
           default:
             items = [];
+        }
+
+        if (rows.length > 0 && items.length === 0) {
+          collector.push({
+            severity: "warning",
+            message: `Parsed ${rows.length} row(s) from ${fileName} but none passed validation.`,
+            hint: "Check required columns, type values, and blank fields.",
+          });
         }
 
         resolve({

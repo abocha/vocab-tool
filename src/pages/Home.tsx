@@ -363,17 +363,26 @@ export function Home() {
         matchingMaxPairs={matchingMaxPairs}
       />
       <main className="app-main" aria-live="polite">
-        {state === "ready" && (warningIssues.length > 0 || rowCount === 0) && (
+        {state === "ready" && (warningIssues.length > 0 || errorIssues.length > 0 || rowCount === 0) && (
           <aside className="app-banner" role="status">
             <div>
               {rowCount > 0
                 ? `Parsed ${rowCount} rows → ${items.length} valid → ${filteredItems.length} after filters. Showing ${displayItems.length} in session.`
                 : "No rows parsed from the CSV pack."}
             </div>
-            {warningIssues.length > 0 && (
+            {(errorIssues.length > 0 || warningIssues.length > 0) && (
               <ul>
+                {errorIssues.map((issue) => (
+                  <li key={`error-${issue.message}`}>
+                    Error: {issue.message}
+                    {issue.hint ? ` (${issue.hint})` : ""}
+                  </li>
+                ))}
                 {warningIssues.map((issue) => (
-                  <li key={issue.message}>{issue.message}</li>
+                  <li key={`warning-${issue.message}`}>
+                    Warning: {issue.message}
+                    {issue.hint ? ` (${issue.hint})` : ""}
+                  </li>
                 ))}
               </ul>
             )}
@@ -393,6 +402,7 @@ export function Home() {
         onClearHidden={handleClearHidden}
         isOpen={isInspectorOpen}
         onToggleOpen={handleToggleInspectorOpen}
+        issues={packIssues}
         settings={settings}
         onSettingsChange={handleSettingsChange}
         level={settings.level}
