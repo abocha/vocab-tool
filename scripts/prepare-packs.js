@@ -60,7 +60,7 @@ async function main() {
   const args = parseArgs();
   const sourceRoot = args.get("--source")
     ? path.resolve(args.get("--source"))
-    : path.join(os.homedir(), "corpus", "simplewiki", "packs");
+    : path.resolve(__dirname, "../.codex-local/corpus/simplewiki/packs");
   const destRoot = args.get("--dest")
     ? path.resolve(args.get("--dest"))
     : path.resolve(__dirname, "../public/packs");

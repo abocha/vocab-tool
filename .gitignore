@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local data mounts / symlinks (never commit)
+.codex-local/
+
+# Real/large packs — only keep tiny samples in git
+public/packs/**
+!public/packs/*/sample-*.csv
