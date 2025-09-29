@@ -556,7 +556,7 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
       download: true,
       header: true,
       skipEmptyLines: "greedy",
-      worker: true,
+      worker: false,
       chunkSize: 64 * 1024,
       chunk: (results: ParseResult<RawRow>) => {
         if (!headers && results.meta && Array.isArray(results.meta.fields)) {
