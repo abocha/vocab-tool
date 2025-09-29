@@ -156,6 +156,16 @@ function buildScrambleCsv(items: ScrambleItem[], level: Level): string {
   return [header, ...rows].join("\n");
 }
 
+function formatExportTimestamp(date: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  return `${year}${month}${day}-${hours}${minutes}`;
+}
+
 export function buildCsvExport(
   items: ExerciseItem[],
   type: ExerciseType,
@@ -183,7 +193,8 @@ export function buildCsvExport(
       return null;
   }
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filename = `${level}-${type}-curated-${timestamp}.csv`;
-  return { csv: `${csv}\n`, filename };
+  const timestamp = formatExportTimestamp(new Date());
+  const filename = `${type}.curated.${level}.${timestamp}.csv`;
+  const BOM = "\ufeff";
+  return { csv: `${BOM}${csv}\n`, filename };
 }

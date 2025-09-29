@@ -15,3 +15,7 @@ function hashString(value: string): string {
 export function createItemId(type: ExerciseType, unique: string): string {
   return `${type}-${hashString(unique)}`;
 }
+
+export function createHash(value: string): string {
+  return hashString(value);
+}

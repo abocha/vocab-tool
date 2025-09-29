@@ -1,5 +1,5 @@
 import Papa, { type ParseError, type ParseRemoteConfig, type ParseResult } from "papaparse";
-import { createItemId } from "./id";
+import { createHash, createItemId } from "./id";
 import type {
   ExerciseItem,
   ExerciseType,
@@ -56,6 +56,7 @@ export interface LoadedPack {
   items: ExerciseItem[];
   issues: PackIssue[];
   rowCount: number;
+  fingerprint: string;
 }
 
 function createIssueCollector() {
@@ -75,6 +76,17 @@ function createIssueCollector() {
     push,
     list: issues,
   };
+}
+
+function buildPackFingerprint(
+  level: Level,
+  type: ExerciseType,
+  rowCount: number,
+  items: ExerciseItem[],
+): string {
+  const sampleIds = items.slice(0, 12).map((item) => item.id).join("|");
+  const base = `${level}:${type}:${rowCount}:${sampleIds}`;
+  return createHash(base);
 }
 
 function validateHeaders(
@@ -316,10 +328,19 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       }
 
       const expectedCount = parseCount(row.count);
+      if (
+        expectedCount !== null &&
+        (expectedCount < 2 || expectedCount > MAX_DECLARED_MATCHING_SET_SIZE)
+      ) {
+        collect.push({
+          severity: "warning",
+          message: `Matching row ${index + 1} declared count ${expectedCount} (ignored; must be between 2 and ${MAX_DECLARED_MATCHING_SET_SIZE}).`,
+        });
+      }
       if (expectedCount !== null && expectedCount !== pairs.length) {
         collect.push({
           severity: "warning",
-          message: `Matching row ${index + 1} expected ${expectedCount} pairs but found ${pairs.length}.`,
+          message: `Matching row ${index + 1} declared count ${expectedCount} but CSV provides ${pairs.length} pair${pairs.length === 1 ? "" : "s"}; using data count.`,
         });
       }
 
@@ -366,6 +387,13 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       group.level = group.level || level;
       group.rawKeys.push(`${pair.left}->${pair.right}`);
       continue;
+    }
+
+    if (declaredCount !== null && !useDeclaredCount) {
+      collect.push({
+        severity: "warning",
+        message: `Matching row ${index + 1} declared count ${declaredCount} (ignored; must be between 2 and ${MAX_DECLARED_MATCHING_SET_SIZE}).`,
+      });
     }
 
     if (useDeclaredCount) {
@@ -692,6 +720,7 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
           items,
           issues: collector.list,
           rowCount: rows.length,
+          fingerprint: buildPackFingerprint(level, type, rows.length, items),
         });
       },
       error: (error: Error) => {

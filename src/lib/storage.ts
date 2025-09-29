@@ -143,6 +143,10 @@ function sanitizeFilters(filters: InspectorFilters): InspectorFilters {
 
 type InspectorStateMap = Record<string, InspectorStateSnapshot>;
 
+function createInspectorKey(level: Level, type: ExerciseType, fingerprint: string): string {
+  return `${level}:${type}:${fingerprint}`;
+}
+
 function readInspectorStateMap(): InspectorStateMap {
   if (!isBrowser()) {
     return {};
@@ -185,12 +189,26 @@ export function getDefaultInspectorState(): InspectorStateSnapshot {
   };
 }
 
-export function loadInspectorState(level: Level, type: ExerciseType): InspectorStateSnapshot {
-  const key = `${level}:${type}`;
+export function loadInspectorState(
+  level: Level,
+  type: ExerciseType,
+  fingerprint: string,
+): InspectorStateSnapshot {
   const map = readInspectorStateMap();
+  const key = createInspectorKey(level, type, fingerprint);
   const stored = map[key];
 
   if (!stored) {
+    const legacy = map[`${level}:${type}`];
+    if (legacy) {
+      return {
+        filters: sanitizeFilters(legacy.filters ?? getDefaultInspectorFilters()),
+        hiddenIds: Array.isArray(legacy.hiddenIds)
+          ? legacy.hiddenIds.filter((id): id is string => typeof id === "string")
+          : [],
+        isOpen: typeof legacy.isOpen === "boolean" ? legacy.isOpen : true,
+      };
+    }
     return getDefaultInspectorState();
   }
 
@@ -210,10 +228,11 @@ export function loadInspectorState(level: Level, type: ExerciseType): InspectorS
 export function saveInspectorState(
   level: Level,
   type: ExerciseType,
+  fingerprint: string,
   state: InspectorStateSnapshot,
 ): void {
-  const key = `${level}:${type}`;
   const map = readInspectorStateMap();
+  const key = createInspectorKey(level, type, fingerprint);
 
   map[key] = {
     filters: sanitizeFilters(state.filters),

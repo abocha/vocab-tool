@@ -70,7 +70,7 @@ Open the “Pack Inspector” panel below the exercise view to curate the curren
 
 - Filter by substring and length range, hide/restore individual items, and see live counts (parsed → filtered → displayed). Filters + hidden IDs persist per `(level, type)` in `localStorage` for quick revisits.
 - Toggle Shuffle, Max Items, and (for matching packs) the `Pairs per Set` limit without leaving the inspector. These settings drive the learner view immediately and also persist.
-- Export the curated subset to CSV directly in the browser. The download preserves the original schema for each exercise type so the file can replace the original pack for a session.
+- Export the curated subset to CSV directly in the browser. Files are named like `matching.curated.A2.20250304-1030.csv`, include a UTF-8 BOM for Excel compatibility, and preserve the original schema for each exercise type (matching exports use the set-per-row form).
 - Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card.
 
 The top-of-page banner also surfaces parse warnings and errors (missing columns, skipped rows, empty files) so malformed packs never crash the app—the UI simply falls back to a friendly empty state.

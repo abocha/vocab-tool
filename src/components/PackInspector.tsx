@@ -157,6 +157,7 @@ export function PackInspector({
   const filteredCount = filteredItems.length;
   const hiddenCount = hiddenIds.size;
   const visibleCount = visibleItems.length;
+  const filteredOutCount = Math.max(0, allItems.length - filteredCount);
   const invalidRange =
     filters.minLength !== null &&
     filters.maxLength !== null &&
@@ -176,8 +177,8 @@ export function PackInspector({
             </p>
           )}
           <p className="pack-inspector__meta" aria-live="polite">
-            Parsed {rowCount} rows → {allItems.length} valid items. After filters: {filteredCount}. Displayed:
-            {` ${visibleCount}`}.
+            Parsed {rowCount} row{rowCount === 1 ? "" : "s"} • Valid {allItems.length} item{allItems.length === 1 ? "" : "s"} • Filtered out {filteredOutCount}
+            • Hidden {hiddenCount} • Displaying {visibleCount}
           </p>
         </div>
         <div className="pack-inspector__header-actions">

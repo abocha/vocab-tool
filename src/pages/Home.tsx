@@ -56,6 +56,7 @@ export function Home() {
   );
   const [hiddenItemIds, setHiddenItemIds] = useState<Set<string>>(() => new Set());
   const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(DEFAULT_INSPECTOR_STATE.isOpen);
+  const [packFingerprint, setPackFingerprint] = useState<string | null>(null);
   const inspectorHydratedRef = useRef(false);
 
   useEffect(() => {
@@ -68,6 +69,7 @@ export function Home() {
     async function fetchExercises() {
       setState("loading");
       setErrorMessage(null);
+      setPackFingerprint(null);
       try {
         const loaded = await loadExercises(settings.level, settings.exerciseType);
         if (cancelled) {
@@ -76,6 +78,7 @@ export function Home() {
         setItems(loaded.items);
         setPackIssues(loaded.issues);
         setRowCount(loaded.rowCount);
+         setPackFingerprint(loaded.fingerprint);
         setState("ready");
       } catch (error) {
         console.warn(error);
@@ -90,6 +93,7 @@ export function Home() {
           ]);
           setState("error");
           setErrorMessage("Unable to load exercises. Please check that the CSV pack exists.");
+          setPackFingerprint(null);
         }
       }
     }
@@ -103,12 +107,18 @@ export function Home() {
 
   useEffect(() => {
     inspectorHydratedRef.current = false;
-    const persisted = loadInspectorState(settings.level, settings.exerciseType);
+    if (!packFingerprint) {
+      setInspectorFilters(getDefaultInspectorFilters());
+      setHiddenItemIds(new Set());
+      setIsInspectorOpen(DEFAULT_INSPECTOR_STATE.isOpen);
+      return;
+    }
+    const persisted = loadInspectorState(settings.level, settings.exerciseType, packFingerprint);
     setInspectorFilters({ ...persisted.filters });
     setHiddenItemIds(new Set(persisted.hiddenIds));
     setIsInspectorOpen(persisted.isOpen);
     inspectorHydratedRef.current = true;
-  }, [settings.level, settings.exerciseType]);
+  }, [packFingerprint, settings.level, settings.exerciseType]);
 
   const filteredItems = useMemo(
     () => applyInspectorFilters(items, inspectorFilters, hiddenItemIds),
@@ -250,8 +260,11 @@ export function Home() {
     if (!inspectorHydratedRef.current) {
       return;
     }
+    if (!packFingerprint) {
+      return;
+    }
 
-    saveInspectorState(settings.level, settings.exerciseType, {
+    saveInspectorState(settings.level, settings.exerciseType, packFingerprint, {
       filters: inspectorFilters,
       hiddenIds: Array.from(hiddenItemIds),
       isOpen: isInspectorOpen,
@@ -260,6 +273,7 @@ export function Home() {
     inspectorFilters,
     hiddenItemIds,
     isInspectorOpen,
+    packFingerprint,
     settings.level,
     settings.exerciseType,
   ]);
