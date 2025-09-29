@@ -25,8 +25,6 @@ const REQUIRED_HEADERS: Record<ExerciseType, string[]> = {
   scramble: ["level", "type", "prompt", "answer"],
 };
 
-const MAX_DECLARED_MATCHING_SET_SIZE = 12;
-
 function safeString(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -47,9 +45,10 @@ function splitList(value: string): string[] {
 }
 
 export interface PackIssue {
-  severity: "warning" | "error";
+  severity: "info" | "warning" | "error";
   message: string;
   hint?: string;
+  details?: string[];
 }
 
 export interface LoadedPack {
@@ -57,6 +56,8 @@ export interface LoadedPack {
   issues: PackIssue[];
   rowCount: number;
   fingerprint: string;
+  matchingDiagnostics?: MatchingDiagnostics | null;
+  matchingShape?: "set" | "pair" | "mixed" | null;
 }
 
 function createIssueCollector() {
@@ -68,7 +69,6 @@ function createIssueCollector() {
     if (!seen.has(fingerprint)) {
       seen.add(fingerprint);
       issues.push(issue);
-      console.warn(issue.message, issue.hint ?? "");
     }
   }
 
@@ -81,11 +81,16 @@ function createIssueCollector() {
 function buildPackFingerprint(
   level: Level,
   type: ExerciseType,
-  rowCount: number,
+  fileName: string,
+  rows: RawRow[],
   items: ExerciseItem[],
 ): string {
-  const sampleIds = items.slice(0, 12).map((item) => item.id).join("|");
-  const base = `${level}:${type}:${rowCount}:${sampleIds}`;
+  const sampleIds = items.slice(0, 8).map((item) => item.id).join("|");
+  const sampleRows = rows
+    .slice(0, 8)
+    .map((row) => JSON.stringify(row))
+    .join("|");
+  const base = `${level}:${type}:${fileName}:${rows.length}:${sampleIds}:${sampleRows}`;
   return createHash(base);
 }
 
@@ -173,25 +178,177 @@ function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssue
   return items;
 }
 
+const MAX_MATCHING_DIAGNOSTIC_EXAMPLES = 5;
+
+export type MatchingExampleType = "mismatch" | "dropped" | "frequency" | "nonNumeric";
+
+export interface MatchingDiagnostics {
+  rowsParsed: number;
+  setsBuilt: number;
+  setsDroppedTooSmall: number;
+  rowsWithMismatchedLengths: number;
+  rowsWithOutOfRangeCount: number;
+  rowsWithNonNumericCount: number;
+  shape: "set" | "pair" | "mixed";
+  examples: Record<MatchingExampleType, string[]>;
+}
+
+interface MatchingDiagnosticsHelper {
+  diagnostics: MatchingDiagnostics;
+  recordExample: (type: MatchingExampleType, sample: string) => void;
+}
+
+function createMatchingDiagnostics(): MatchingDiagnosticsHelper {
+  const diagnostics: MatchingDiagnostics = {
+    rowsParsed: 0,
+    setsBuilt: 0,
+    setsDroppedTooSmall: 0,
+    rowsWithMismatchedLengths: 0,
+    rowsWithOutOfRangeCount: 0,
+    rowsWithNonNumericCount: 0,
+    shape: "set",
+    examples: {
+      mismatch: [],
+      dropped: [],
+      frequency: [],
+      nonNumeric: [],
+    },
+  };
+
+  function recordExample(type: MatchingExampleType, sample: string) {
+    const bucket = diagnostics.examples[type];
+    if (!bucket) {
+      return;
+    }
+    if (bucket.length >= 25) {
+      return;
+    }
+    bucket.push(sample);
+  }
+
+  return { diagnostics, recordExample };
+}
+
 interface MatchingGroup {
   pairs: MatchingPair[];
   source?: string;
   license?: string;
   level?: Level;
   rawKeys: string[];
+  freq?: number | null;
+  sampleRow?: number;
+  origin: "set" | "pair";
+  groupId?: string;
 }
 
-function normalizeMatchingSet(
+interface PendingSinglePair {
+  pair: MatchingPair;
+  source?: string;
+  license?: string;
+  level?: Level;
+  rawKey: string;
+  index: number;
+  freq?: number | null;
+}
+
+function planChunkSizes(total: number): number[] {
+  const sizes: number[] = [];
+  let remaining = total;
+
+  while (remaining > 0) {
+    if (remaining === 1) {
+      if (sizes.length > 0) {
+        sizes[sizes.length - 1] += 1;
+      } else {
+        sizes.push(1);
+      }
+      break;
+    }
+
+    if (remaining <= 5) {
+      sizes.push(remaining);
+      break;
+    }
+
+    const remainder = remaining % 4;
+    if (remainder === 1 && remaining >= 5) {
+      sizes.push(5);
+      remaining -= 5;
+      continue;
+    }
+    if (remainder === 2) {
+      sizes.push(3);
+      remaining -= 3;
+      continue;
+    }
+
+    sizes.push(4);
+    remaining -= 4;
+  }
+
+  return sizes;
+}
+
+function selectRepresentativeSamples(samples: string[], limit = MAX_MATCHING_DIAGNOSTIC_EXAMPLES): string[] {
+  if (samples.length <= limit) {
+    return samples;
+  }
+  const result: string[] = [];
+  const maxIndex = samples.length - 1;
+  for (let i = 0; i < limit; i += 1) {
+    const position = limit === 1 ? 0 : Math.round((i * maxIndex) / (limit - 1));
+    const value = samples[position];
+    if (!result.includes(value)) {
+      result.push(value);
+    }
+  }
+  while (result.length < limit && result.length < samples.length) {
+    const candidate = samples[result.length];
+    if (!result.includes(candidate)) {
+      result.push(candidate);
+    } else {
+      break;
+    }
+  }
+  return result;
+}
+
+function dedupePairs(pairs: MatchingPair[]): MatchingPair[] {
+  const seen = new Set<string>();
+  const deduped: MatchingPair[] = [];
+  pairs.forEach((pair) => {
+    const key = `${pair.left.toLowerCase()}→${pair.right.toLowerCase()}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    deduped.push(pair);
+  });
+  return deduped;
+}
+
+function finalizeMatchingSet(
   identifier: string,
   group: MatchingGroup,
-  collect: ReturnType<typeof createIssueCollector>,
+  helper: MatchingDiagnosticsHelper,
 ): MatchingItem | null {
-  if (group.pairs.length === 0) {
-    collect.push({
-      severity: "warning",
-      message: `Matching set ${identifier} has no valid pairs and was skipped.`,
-    });
+  group.pairs = dedupePairs(group.pairs);
+  const pairCount = group.pairs.length;
+  if (pairCount < 2) {
+    helper.diagnostics.setsDroppedTooSmall += 1;
+    helper.recordExample(
+      "dropped",
+      `set ${identifier} (${pairCount} pair${pairCount === 1 ? "" : "s"})`,
+    );
     return null;
+  }
+
+  if (group.freq != null && Number.isFinite(group.freq) && group.freq !== pairCount) {
+    helper.diagnostics.rowsWithOutOfRangeCount += 1;
+    helper.recordExample(
+      "frequency",
+      `set ${identifier}: count=${group.freq}, pairs=${pairCount}`,
+    );
   }
 
   const uniqueKey = group.rawKeys.join("|");
@@ -203,118 +360,69 @@ function normalizeMatchingSet(
     source: group.source,
     license: group.license,
     level: group.level,
+    freq: group.freq ?? null,
+    origin: group.origin,
+    groupId: group.groupId,
   };
 }
 
-function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssueCollector>): MatchingItem[] {
+function buildMatchingRows(
+  rows: RawRow[],
+): { items: MatchingItem[]; diagnostics: MatchingDiagnostics; shape: "set" | "pair" | "mixed" } {
+  const { diagnostics, recordExample } = createMatchingDiagnostics();
+  diagnostics.rowsParsed = rows.length;
+
   const items: MatchingItem[] = [];
   const groupedById = new Map<string, MatchingGroup>();
   const order: string[] = [];
-  const shapesSeen: Set<"set" | "pair"> = new Set();
-  let pendingCountGroup: MatchingGroup | null = null;
-  let pendingCountExpected: number | null = null;
-  let pendingCountIdentifier: string | null = null;
-  let countGroupIndex = 0;
-
-  type PendingSinglePair = {
-    pair: MatchingPair;
-    source?: string;
-    license?: string;
-    level?: Level;
-    rawKey: string;
-    index: number;
-  };
-
   const singlePairs: PendingSinglePair[] = [];
-
-  function planChunkSizes(total: number): number[] {
-    const sizes: number[] = [];
-    let remaining = total;
-
-    while (remaining > 0) {
-      if (remaining === 1) {
-        if (sizes.length > 0) {
-          sizes[sizes.length - 1] += 1;
-        } else {
-          sizes.push(1);
-        }
-        break;
-      }
-
-      if (remaining <= 5) {
-        sizes.push(remaining);
-        break;
-      }
-
-      const remainder = remaining % 4;
-      if (remainder === 1 && remaining >= 5) {
-        sizes.push(5);
-        remaining -= 5;
-        continue;
-      }
-      if (remainder === 2) {
-        sizes.push(3);
-        remaining -= 3;
-        continue;
-      }
-
-      sizes.push(4);
-      remaining -= 4;
-    }
-
-    return sizes;
-  }
+  let sawSet = false;
+  let sawPair = false;
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
+    const rowNumber = index + 1;
+
     const leftColumn = safeString(row.left);
     const rightColumn = safeString(row.right);
-    if (!leftColumn || !rightColumn) {
-      collect.push({
-        severity: "warning",
-        message: `Skipped matching row ${index + 1} with missing left/right values.`,
-      });
-      continue;
-    }
-
     const typeValue = safeString(row.type);
+
     if (typeValue && typeValue.toLowerCase() !== "matching") {
-      collect.push({
-        severity: "warning",
-        message: `Skipped matching row ${index + 1} due to unexpected type value '${typeValue}'.`,
-      });
+      recordExample("dropped", `row ${rowNumber}: unexpected type '${typeValue}'`);
+      diagnostics.setsDroppedTooSmall += 1;
       continue;
     }
 
+    const source = safeString(row.source) || undefined;
+    const license = safeString(row.license) || undefined;
     const levelRaw = safeString(row.level);
-    if (!levelRaw) {
-      collect.push({
-        severity: "warning",
-        message: `Matching row ${index + 1} is missing a level value.`,
-      });
-    }
     const level = levelRaw ? (levelRaw as Level) : undefined;
-    const source = safeString(row.source);
-    const license = safeString(row.license);
     const setId = safeString(row.setId ?? row.group ?? "");
+    const rawCount = safeString(row.count);
     const declaredCount = parseCount(row.count);
-    const useDeclaredCount =
-      declaredCount !== null &&
-      declaredCount >= 2 &&
-      declaredCount <= MAX_DECLARED_MATCHING_SET_SIZE;
+    if (rawCount.length > 0 && declaredCount === null) {
+      diagnostics.rowsWithNonNumericCount += 1;
+      recordExample("nonNumeric", `row ${rowNumber}: count='${rawCount}' ignored`);
+    }
+
+    if (!leftColumn || !rightColumn) {
+      diagnostics.setsDroppedTooSmall += 1;
+      recordExample("dropped", `row ${rowNumber}: missing left/right value`);
+      continue;
+    }
 
     const leftOptions = splitList(leftColumn);
     const rightOptions = splitList(rightColumn);
     const hasMultiple = leftOptions.length > 1 || rightOptions.length > 1;
 
     if (hasMultiple) {
-      shapesSeen.add("set");
       const pairCount = Math.min(leftOptions.length, rightOptions.length);
       if (leftOptions.length !== rightOptions.length) {
-        collect.push({
-          severity: "warning",
-          message: `Matching row ${index + 1} has unequal left/right counts. Extra entries were dropped.`,
-        });
+        diagnostics.rowsWithMismatchedLengths += 1;
+        recordExample(
+          "mismatch",
+          `row ${rowNumber}: left=${leftOptions.length}, right=${rightOptions.length}`,
+        );
       }
 
       const pairs: MatchingPair[] = [];
@@ -327,38 +435,26 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
         pairs.push({ left, right });
       }
 
-      const expectedCount = parseCount(row.count);
-      if (
-        expectedCount !== null &&
-        (expectedCount < 2 || expectedCount > MAX_DECLARED_MATCHING_SET_SIZE)
-      ) {
-        collect.push({
-          severity: "warning",
-          message: `Matching row ${index + 1} declared count ${expectedCount} (ignored; must be between 2 and ${MAX_DECLARED_MATCHING_SET_SIZE}).`,
-        });
-      }
-      if (expectedCount !== null && expectedCount !== pairs.length) {
-        collect.push({
-          severity: "warning",
-          message: `Matching row ${index + 1} declared count ${expectedCount} but CSV provides ${pairs.length} pair${pairs.length === 1 ? "" : "s"}; using data count.`,
-        });
-      }
+      const group: MatchingGroup = {
+        pairs,
+        source,
+        license,
+        level,
+        rawKeys: [leftColumn, rightColumn],
+        freq: declaredCount,
+        sampleRow: rowNumber,
+        origin: "set",
+        groupId: setId || `row-${rowNumber}`,
+      };
 
-      const identifier = setId || `row-${index + 1}`;
-      const item = normalizeMatchingSet(
-        identifier,
-        {
-          pairs,
-          source,
-          license,
-          level,
-          rawKeys: [leftColumn, rightColumn],
-        },
-        collect,
-      );
+      const item = finalizeMatchingSet(setId || `row-${rowNumber}`, group, {
+        diagnostics,
+        recordExample,
+      });
       if (item) {
         items.push(item);
       }
+      sawSet = true;
       continue;
     }
 
@@ -366,8 +462,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       left: leftOptions[0] ?? leftColumn,
       right: rightOptions[0] ?? rightColumn,
     };
-
-    shapesSeen.add("pair");
 
     if (setId) {
       if (!groupedById.has(setId)) {
@@ -377,6 +471,10 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
           license,
           level,
           rawKeys: [],
+          freq: declaredCount,
+          sampleRow: rowNumber,
+          origin: "pair",
+          groupId: setId,
         });
         order.push(setId);
       }
@@ -386,94 +484,31 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       group.license = group.license || license;
       group.level = group.level || level;
       group.rawKeys.push(`${pair.left}->${pair.right}`);
+      if (group.freq == null && declaredCount != null) {
+        group.freq = declaredCount;
+      }
+      if (group.sampleRow == null) {
+        group.sampleRow = rowNumber;
+      }
+      sawPair = true;
       continue;
-    }
-
-    if (declaredCount !== null && !useDeclaredCount) {
-      collect.push({
-        severity: "warning",
-        message: `Matching row ${index + 1} declared count ${declaredCount} (ignored; must be between 2 and ${MAX_DECLARED_MATCHING_SET_SIZE}).`,
-      });
-    }
-
-    if (useDeclaredCount) {
-      if (
-        !pendingCountGroup ||
-        (pendingCountExpected !== null && pendingCountGroup.pairs.length >= pendingCountExpected)
-      ) {
-        if (
-          pendingCountGroup &&
-          pendingCountExpected !== null &&
-          pendingCountGroup.pairs.length > 0 &&
-          pendingCountGroup.pairs.length !== pendingCountExpected
-        ) {
-          collect.push({
-            severity: "warning",
-            message: `Matching set ${pendingCountIdentifier ?? "(count)"} expected ${pendingCountExpected} pairs but found ${pendingCountGroup.pairs.length}.`,
-          });
-        }
-
-        countGroupIndex += 1;
-        pendingCountIdentifier = `count-${countGroupIndex}`;
-        pendingCountGroup = {
-          pairs: [],
-          source: source || undefined,
-          license: license || undefined,
-          level: level || undefined,
-          rawKeys: [],
-        };
-        pendingCountExpected = declaredCount;
-      }
-
-      if (pendingCountGroup) {
-        pendingCountGroup.pairs.push(pair);
-        if (source) {
-          pendingCountGroup.source = pendingCountGroup.source || source;
-        }
-        if (license) {
-          pendingCountGroup.license = pendingCountGroup.license || license;
-        }
-        if (level) {
-          pendingCountGroup.level = pendingCountGroup.level || level;
-        }
-        pendingCountGroup.rawKeys.push(`${pair.left}->${pair.right}`);
-
-        if (
-          pendingCountExpected !== null &&
-          pendingCountGroup.pairs.length === pendingCountExpected
-        ) {
-          const item = normalizeMatchingSet(
-            pendingCountIdentifier ?? `count-${countGroupIndex}`,
-            pendingCountGroup,
-            collect,
-          );
-          if (item) {
-            items.push(item);
-          }
-          pendingCountGroup = null;
-          pendingCountExpected = null;
-          pendingCountIdentifier = null;
-        }
-        continue;
-      }
     }
 
     singlePairs.push({
       pair,
-      source: source || undefined,
-      license: license || undefined,
-      level: level || undefined,
+      source,
+      license,
+      level,
       rawKey: `${pair.left}->${pair.right}`,
       index,
+      freq: declaredCount,
     });
+    sawPair = true;
   }
 
   if (singlePairs.length === 1) {
-    const onlyPair = singlePairs[0];
-    collect.push({
-      severity: "warning",
-      message: `Matching row ${onlyPair.index + 1} could not form a multi-pair set and was skipped.`,
-    });
+    diagnostics.setsDroppedTooSmall += 1;
+    recordExample("dropped", `row ${singlePairs[0].index + 1}: single pair without a group`);
   } else if (singlePairs.length > 1) {
     const chunkSizes = planChunkSizes(singlePairs.length);
     let cursor = 0;
@@ -482,38 +517,32 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       const slice = singlePairs.slice(cursor, cursor + size);
       cursor += size;
       if (slice.length < 2) {
-        if (slice.length === 1) {
-          collect.push({
-            severity: "warning",
-            message: `Matching row ${slice[0].index + 1} was skipped because it did not have enough pairs to form a set.`,
-          });
-        }
+        diagnostics.setsDroppedTooSmall += 1;
+        recordExample(
+          "dropped",
+          `row ${slice[0].index + 1}: insufficient pairs after chunking`,
+        );
         return;
       }
 
       const identifier = `chunk-${slice[0].index + 1}`;
+      const meta = slice.find((entry) => entry.source || entry.license || entry.level);
+      const freqEntry = slice.find((entry) => entry.freq != null);
       const group: MatchingGroup = {
         pairs: slice.map((entry) => entry.pair),
-        source: slice.find((entry) => Boolean(entry.source))?.source,
-        license: slice.find((entry) => Boolean(entry.license))?.license,
-        level: slice.find((entry) => Boolean(entry.level))?.level,
+        source: meta?.source,
+        license: meta?.license,
+        level: meta?.level,
         rawKeys: slice.map((entry) => entry.rawKey),
+        freq: freqEntry?.freq ?? null,
+        sampleRow: slice[0].index + 1,
+        origin: "pair",
+        groupId: identifier,
       };
-      const item = normalizeMatchingSet(identifier, group, collect);
+      const item = finalizeMatchingSet(identifier, group, { diagnostics, recordExample });
       if (item) {
         items.push(item);
       }
-    });
-  }
-
-  if (
-    pendingCountGroup &&
-    pendingCountExpected !== null &&
-    pendingCountGroup.pairs.length > 0
-  ) {
-    collect.push({
-      severity: "warning",
-      message: `Matching set ${pendingCountIdentifier ?? "(count)"} expected ${pendingCountExpected} pairs but encountered end of file after ${pendingCountGroup.pairs.length}.`,
     });
   }
 
@@ -522,21 +551,86 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
     if (!group) {
       return;
     }
-    const item = normalizeMatchingSet(identifier, group, collect);
+    const item = finalizeMatchingSet(identifier, group, { diagnostics, recordExample });
     if (item) {
       items.push(item);
     }
   });
 
-  if (shapesSeen.has("set") && shapesSeen.has("pair")) {
-    collect.push({
-      severity: "warning",
-      message: "Matching pack mixes set-per-row and pair-per-row entries. Normalized automatically.",
-      hint: "Verify setId values to keep intended groupings together.",
+  diagnostics.setsBuilt = items.length;
+  diagnostics.shape = sawSet && sawPair ? "mixed" : sawPair ? "pair" : "set";
+
+  return { items, diagnostics, shape: diagnostics.shape };
+}
+
+function matchingDiagnosticsToIssues(diagnostics: MatchingDiagnostics): PackIssue[] {
+  const issues: PackIssue[] = [];
+
+  const metadataCount =
+    diagnostics.rowsWithOutOfRangeCount + diagnostics.rowsWithNonNumericCount;
+
+  const summaryMessage = `Summary — rows parsed ${diagnostics.rowsParsed}, sets built ${diagnostics.setsBuilt}, dropped (<2 pairs) ${diagnostics.setsDroppedTooSmall}, mismatched lengths ${diagnostics.rowsWithMismatchedLengths}, count metadata ${metadataCount}, shape ${diagnostics.shape}.`;
+  issues.push({ severity: "info", message: summaryMessage });
+
+  if (metadataCount > 0) {
+    const frequencySamples = selectRepresentativeSamples(diagnostics.examples.frequency);
+    const nonNumericSamples = selectRepresentativeSamples(diagnostics.examples.nonNumeric);
+    const details = [...frequencySamples, ...nonNumericSamples];
+    issues.push({
+      severity: "info",
+      message: `${metadataCount} row${metadataCount === 1 ? "" : "s"} included a frequency 'count' value (ignored for set sizing).`,
+      hint: `${diagnostics.rowsWithOutOfRangeCount} out-of-range, ${diagnostics.rowsWithNonNumericCount} non-numeric.`,
+      details: details.length > 0 ? details : undefined,
     });
   }
 
-  return items;
+  if (diagnostics.shape === "mixed") {
+    issues.push({
+      severity: "info",
+      message: "Matching pack mixes set-per-row and pair-per-row data. Export defaults to set-per-row shape.",
+    });
+  } else if (diagnostics.shape === "pair") {
+    issues.push({
+      severity: "info",
+      message: "Matching pack detected as pair-per-row. Export preserves pair-per-row schema.",
+    });
+  }
+
+  if (diagnostics.rowsWithMismatchedLengths > 0) {
+    const details = selectRepresentativeSamples(diagnostics.examples.mismatch);
+    issues.push({
+      severity: "warning",
+      message: `${diagnostics.rowsWithMismatchedLengths} row${diagnostics.rowsWithMismatchedLengths === 1 ? "" : "s"} had mismatched left/right lengths; pairs were truncated to the shorter list.`,
+      details: details.length > 0 ? details : undefined,
+    });
+  }
+
+  if (diagnostics.setsDroppedTooSmall > 0) {
+    const details = selectRepresentativeSamples(diagnostics.examples.dropped);
+    issues.push({
+      severity: "error",
+      message: `${diagnostics.setsDroppedTooSmall} set${diagnostics.setsDroppedTooSmall === 1 ? "" : "s"} dropped because they contained fewer than 2 pairs.`,
+      details: details.length > 0 ? details : undefined,
+    });
+  }
+
+  return issues;
+}
+
+function logMatchingDiagnostics(level: Level, diagnostics: MatchingDiagnostics) {
+  if (diagnostics.rowsParsed === 0) {
+    return;
+  }
+
+  const summary = `Matching loader summary (${level}): rowsParsed=${diagnostics.rowsParsed}, setsBuilt=${diagnostics.setsBuilt}, setsDroppedTooSmall=${diagnostics.setsDroppedTooSmall}, rowsWithMismatchedLengths=${diagnostics.rowsWithMismatchedLengths}, rowsWithOutOfRangeCount=${diagnostics.rowsWithOutOfRangeCount}, rowsWithNonNumericCount=${diagnostics.rowsWithNonNumericCount}`;
+  console.log(summary);
+  (Object.entries(diagnostics.examples) as Array<[MatchingExampleType, string[]]>).forEach(
+    ([type, samples]) => {
+      selectRepresentativeSamples(samples).forEach((sample) => {
+        console.log(`  example[${type}]: ${sample}`);
+      });
+    },
+  );
 }
 
 function buildMcqRows(rows: RawRow[], collect: ReturnType<typeof createIssueCollector>): McqItem[] {
@@ -639,7 +733,14 @@ const packCache = new Map<string, Promise<LoadedPack>>();
 export async function loadExercises(level: Level, type: ExerciseType): Promise<LoadedPack> {
   const fileName = FILE_MAP[type];
   if (!fileName) {
-    return { items: [], issues: [], rowCount: 0 };
+    return {
+      items: [],
+      issues: [],
+      rowCount: 0,
+      fingerprint: createHash(`${level}:${type}:missing-file`),
+      matchingDiagnostics: null,
+      matchingShape: null,
+    };
   }
 
   const url = `/packs/${level}/${fileName}`;
@@ -691,12 +792,14 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
         }
 
         let items: ExerciseItem[] = [];
+        let matchingDiagnostics: MatchingDiagnostics | null = null;
+        let matchingShape: "set" | "pair" | "mixed" | null = null;
         switch (type) {
           case "gapfill":
             items = buildGapFillRows(rows, collector);
             break;
           case "matching":
-            items = buildMatchingRows(rows, collector);
+            ({ items, diagnostics: matchingDiagnostics, shape: matchingShape } = buildMatchingRows(rows));
             break;
           case "mcq":
             items = buildMcqRows(rows, collector);
@@ -716,11 +819,19 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
           });
         }
 
+        const combinedIssues: PackIssue[] = [...collector.list];
+        if (matchingDiagnostics) {
+          combinedIssues.push(...matchingDiagnosticsToIssues(matchingDiagnostics));
+          logMatchingDiagnostics(level, matchingDiagnostics);
+        }
+
         resolve({
           items,
-          issues: collector.list,
+          issues: combinedIssues,
           rowCount: rows.length,
-          fingerprint: buildPackFingerprint(level, type, rows.length, items),
+          fingerprint: buildPackFingerprint(level, type, fileName, rows, items),
+          matchingDiagnostics,
+          matchingShape,
         });
       },
       error: (error: Error) => {

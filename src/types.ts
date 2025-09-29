@@ -26,6 +26,9 @@ export interface MatchingPair {
 export interface MatchingItem extends ExerciseBase {
   type: "matching";
   pairs: MatchingPair[];
+  freq?: number | null;
+  origin?: "set" | "pair";
+  groupId?: string;
 }
 
 export interface McqItem extends ExerciseBase {
@@ -68,4 +71,6 @@ export interface InspectorStateSnapshot {
   filters: InspectorFilters;
   hiddenIds: string[];
   isOpen: boolean;
+  showDetails: boolean;
+  showInfo: boolean;
 }

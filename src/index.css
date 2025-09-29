@@ -99,6 +99,35 @@ button:focus-visible {
 .app-banner ul {
   margin: 0.75rem 0 0;
   padding-left: 1.25rem;
+  list-style: none;
+}
+
+.app-banner__item {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-bottom: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.app-banner__item:last-child {
+  margin-bottom: 0;
+}
+
+.app-banner__item-label {
+  font-weight: 600;
+}
+
+.app-banner__item--error .app-banner__item-label {
+  color: #b91c1c;
+}
+
+.app-banner__item--warning .app-banner__item-label {
+  color: #b45309;
+}
+
+.app-banner__item--info .app-banner__item-label {
+  color: #2563eb;
 }
 
 .top-bar {
@@ -383,10 +412,36 @@ button:focus-visible {
   gap: 0.75rem;
 }
 
+.pack-inspector__diagnostics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
 .pack-inspector__diagnostics h3 {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
+}
+
+.pack-inspector__diagnostics-toggle-group {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.pack-inspector__diagnostics-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #0f172a;
+}
+
+.pack-inspector__diagnostics-toggle input {
+  margin: 0;
 }
 
 .pack-inspector__diagnostics ul {
@@ -415,6 +470,11 @@ button:focus-visible {
   background-color: rgba(254, 243, 199, 0.7);
 }
 
+.pack-inspector__diagnostics-item--info {
+  border-left: 4px solid #2563eb;
+  background-color: rgba(191, 219, 254, 0.7);
+}
+
 .pack-inspector__diagnostic-tag {
   font-size: 0.75rem;
   font-weight: 600;
@@ -432,6 +492,25 @@ button:focus-visible {
 
 .pack-inspector__diagnostics-item--warning .pack-inspector__diagnostic-tag {
   background-color: #d97706;
+}
+
+.pack-inspector__diagnostics-item--info .pack-inspector__diagnostic-tag {
+  background-color: #2563eb;
+}
+
+.pack-inspector__diagnostics-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pack-inspector__diagnostics-details {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.85rem;
+  color: #334155;
+  display: grid;
+  gap: 0.35rem;
 }
 
 .pack-inspector fieldset {

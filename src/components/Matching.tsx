@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createHash } from "../lib/id";
 import type { MatchingItem } from "../types";
 
 interface MatchingProps {
@@ -11,13 +12,22 @@ interface MatchingProps {
 
 type PairResult = "correct" | "incorrect" | null;
 
-function shuffle<T>(values: T[]): T[] {
-  const array = [...values];
-  for (let i = array.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-  return array;
+function hashToNumber(seed: string): number {
+  const hex = createHash(seed);
+  return Number.parseInt(hex.slice(0, 8), 16);
+}
+
+function getDeterministicOrder(length: number, seed: string): number[] {
+  return Array.from({ length }, (_, index) => index).sort((a, b) => {
+    const hashA = hashToNumber(`${seed}:${a}`);
+    const hashB = hashToNumber(`${seed}:${b}`);
+    return hashA - hashB;
+  });
+}
+
+function deterministicShuffle<T>(values: T[], seed: string): T[] {
+  const order = getDeterministicOrder(values.length, seed);
+  return order.map((index) => values[index]);
 }
 
 export function Matching({ item, onResult, onNext, existingResult, pairLimit }: MatchingProps) {
@@ -29,12 +39,10 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
     if (pairLimit >= totalPairs) {
       return item.pairs;
     }
-    const indices = item.pairs.map((_, index) => index);
-    const selected = shuffle(indices)
-      .slice(0, pairLimit)
-      .sort((a, b) => a - b);
+    const indices = getDeterministicOrder(item.pairs.length, `${item.id}:pairs`);
+    const selected = indices.slice(0, pairLimit).sort((a, b) => a - b);
     return selected.map((index) => item.pairs[index]);
-  }, [item.pairs, pairLimit]);
+  }, [item.id, item.pairs, pairLimit]);
 
   const [selections, setSelections] = useState<Record<number, string>>({});
   const [pairFeedback, setPairFeedback] = useState<Record<number, PairResult>>({});
@@ -42,8 +50,8 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
   const [resultSummary, setResultSummary] = useState({ correct: 0, total: limitedPairs.length });
 
   const rightOptions = useMemo(
-    () => shuffle(limitedPairs.map((pair) => pair.right)),
-    [limitedPairs],
+    () => deterministicShuffle(limitedPairs.map((pair) => pair.right), `${item.id}:options`),
+    [item.id, limitedPairs],
   );
 
   useEffect(() => {
@@ -91,7 +99,7 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
       return "";
     }
     if (pairLimit && pairLimit > 0) {
-      return `Pairs per Set limit ${pairLimit} → showing ${limitedPairs.length} of ${totalPairs} pairs this round.`;
+      return `Showing ${limitedPairs.length} of ${totalPairs} pairs (Pairs per Set limit ${pairLimit}).`;
     }
     return `Showing ${limitedPairs.length} of ${totalPairs} pairs this round (sampled randomly).`;
   }, [limitedPairs, pairLimit, showingSubset, totalPairs]);

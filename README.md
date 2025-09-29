@@ -50,6 +50,10 @@ The Matching exercise now accepts both CSV variants and normalises them into a s
 
 When both shapes appear in the same file, the inspector banner calls it out so you can review the grouping. Learners still receive the same scoring UX: set score, overall % score, and an explicit note if the `Pairs per Set` limit sampled a subset of the available pairs.
 
+- The optional `count` column is treated as frequency metadata (not a set size). Actual set size is derived from the parsed pairs; the “Pairs per Set” control caps how many are shown.
+- Diagnostics are summarised (counts by issue). Toggle “Show info notices” / “Show detailed warnings” in the inspector to reveal optional metadata notes and up to five representative sample rows per issue type.
+- Sampling is deterministic per dataset + set identifier, so a given `Pairs per Set` limit pulls the same subset until the data changes.
+
 ### Copying or Sampling Packs
 
 Use the included helper to copy CSVs from the corpus workspace and optionally keep only the first N rows for fast iteration:
@@ -71,7 +75,7 @@ Open the “Pack Inspector” panel below the exercise view to curate the curren
 - Filter by substring and length range, hide/restore individual items, and see live counts (parsed → filtered → displayed). Filters + hidden IDs persist per `(level, type)` in `localStorage` for quick revisits.
 - Toggle Shuffle, Max Items, and (for matching packs) the `Pairs per Set` limit without leaving the inspector. These settings drive the learner view immediately and also persist.
 - Export the curated subset to CSV directly in the browser. Files are named like `matching.curated.A2.20250304-1030.csv`, include a UTF-8 BOM for Excel compatibility, and preserve the original schema for each exercise type (matching exports use the set-per-row form).
-- Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card.
+- Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card. Enable “Show info notices” and “Show detailed warnings” to reveal optional metadata notes and up to five concrete examples per issue type.
 
 The top-of-page banner also surfaces parse warnings and errors (missing columns, skipped rows, empty files) so malformed packs never crash the app—the UI simply falls back to a friendly empty state.
 

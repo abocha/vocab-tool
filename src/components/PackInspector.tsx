@@ -6,7 +6,7 @@ import type {
   InspectorFilters,
   Level,
 } from "../types";
-import type { PackIssue } from "../lib/csv";
+import type { MatchingDiagnostics, PackIssue } from "../lib/csv";
 import { MAX_ITEMS_CHOICES } from "../lib/constants";
 import { buildCsvExport, itemLength, itemToPlainText } from "../lib/inspector";
 
@@ -47,12 +47,18 @@ interface PackInspectorProps {
   onClearHidden: () => void;
   isOpen: boolean;
   onToggleOpen: () => void;
+  showDetails: boolean;
+  onToggleDetails: () => void;
+  showInfo: boolean;
+  onToggleInfo: () => void;
   issues: PackIssue[];
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
   level: Level;
   exerciseType: ExerciseType;
   rowCount: number;
+  matchingDiagnostics?: MatchingDiagnostics | null;
+  matchingShape?: "set" | "pair" | "mixed" | null;
 }
 
 function formatItemSummary(item: ExerciseItem): string {
@@ -97,12 +103,18 @@ export function PackInspector({
   onClearHidden,
   isOpen,
   onToggleOpen,
+  showDetails,
+  onToggleDetails,
+  showInfo,
+  onToggleInfo,
   issues,
   settings,
   onSettingsChange,
   level,
   exerciseType,
   rowCount,
+  matchingDiagnostics,
+  matchingShape,
 }: PackInspectorProps) {
 
   const hiddenItems = useMemo(
@@ -112,29 +124,55 @@ export function PackInspector({
 
   const datasetLabel = `${level} · ${TYPE_LABELS[exerciseType]}`;
   const sourcePath = `packs/${level}/${PACK_FILENAMES[exerciseType]}`;
-  const warningIssues = useMemo(
-    () => issues.filter((issue) => issue.severity === "warning"),
-    [issues],
-  );
-  const errorIssues = useMemo(
-    () => issues.filter((issue) => issue.severity === "error"),
-    [issues],
-  );
-  const errorCount = errorIssues.length;
-  const warningCount = warningIssues.length;
+  const severityLabel: Record<PackIssue["severity"], string> = {
+    error: "Error",
+    warning: "Warning",
+    info: "Info",
+  };
+
+  const counts = useMemo(() => {
+    let info = 0;
+    let warning = 0;
+    let error = 0;
+    issues.forEach((issue) => {
+      if (issue.severity === "info") {
+        info += 1;
+      } else if (issue.severity === "warning") {
+        warning += 1;
+      } else if (issue.severity === "error") {
+        error += 1;
+      }
+    });
+    return { infoCount: info, warningCount: warning, errorCount: error };
+  }, [issues]);
+
   const diagnosticsSummary = useMemo(() => {
     if (issues.length === 0) {
       return "";
     }
     const parts: string[] = [];
-    if (errorCount > 0) {
-      parts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
+    if (counts.errorCount > 0) {
+      parts.push(`${counts.errorCount} error${counts.errorCount === 1 ? "" : "s"}`);
     }
-    if (warningCount > 0) {
-      parts.push(`${warningCount} warning${warningCount === 1 ? "" : "s"}`);
+    if (counts.warningCount > 0) {
+      parts.push(`${counts.warningCount} warning${counts.warningCount === 1 ? "" : "s"}`);
+    }
+    if (counts.infoCount > 0) {
+      parts.push(`${counts.infoCount} info note${counts.infoCount === 1 ? "" : "s"}`);
     }
     return parts.join(", ");
-  }, [errorCount, warningCount, issues.length]);
+  }, [counts.errorCount, counts.warningCount, counts.infoCount, issues.length]);
+
+  const sortedIssues = useMemo(() => {
+    const order: Record<PackIssue["severity"], number> = {
+      error: 0,
+      warning: 1,
+      info: 2,
+    };
+    return issues
+      .filter((issue) => (issue.severity === "info" ? showInfo : true))
+      .sort((a, b) => order[a.severity] - order[b.severity]);
+  }, [issues, showInfo]);
 
   const handleFilterChange = <Key extends keyof InspectorFilters>(
     key: Key,
@@ -147,7 +185,14 @@ export function PackInspector({
   };
 
   const handleExport = () => {
-    const exportData = buildCsvExport(visibleItems, exerciseType, level);
+    const exportData = buildCsvExport(visibleItems, exerciseType, level, {
+      matchingShape:
+        exerciseType === "matching"
+          ? matchingShape === "pair"
+            ? "pair"
+            : "set"
+          : undefined,
+    });
     if (!exportData) {
       return;
     }
@@ -158,6 +203,9 @@ export function PackInspector({
   const hiddenCount = hiddenIds.size;
   const visibleCount = visibleItems.length;
   const filteredOutCount = Math.max(0, allItems.length - filteredCount);
+  const matchingSummary = matchingDiagnostics
+    ? `Rows ${matchingDiagnostics.rowsParsed} • Sets ${matchingDiagnostics.setsBuilt} • Dropped <2 pairs ${matchingDiagnostics.setsDroppedTooSmall} • Mismatched ${matchingDiagnostics.rowsWithMismatchedLengths} • Count metadata ${matchingDiagnostics.rowsWithOutOfRangeCount + matchingDiagnostics.rowsWithNonNumericCount}`
+    : null;
   const invalidRange =
     filters.minLength !== null &&
     filters.maxLength !== null &&
@@ -180,6 +228,11 @@ export function PackInspector({
             Parsed {rowCount} row{rowCount === 1 ? "" : "s"} • Valid {allItems.length} item{allItems.length === 1 ? "" : "s"} • Filtered out {filteredOutCount}
             • Hidden {hiddenCount} • Displaying {visibleCount}
           </p>
+          {exerciseType === "matching" && matchingSummary && (
+            <p className="pack-inspector__meta" aria-live="polite">
+              Matching summary: {matchingSummary}
+            </p>
+          )}
         </div>
         <div className="pack-inspector__header-actions">
           <button
@@ -197,24 +250,45 @@ export function PackInspector({
         <div id="pack-inspector-panel" className="pack-inspector__panel" aria-labelledby="pack-inspector-heading">
           {issues.length > 0 && (
             <section className="pack-inspector__diagnostics" aria-label="Pack diagnostics">
-              <h3>Diagnostics</h3>
+              <div className="pack-inspector__diagnostics-header">
+                <h3>Diagnostics</h3>
+                <div className="pack-inspector__diagnostics-toggle-group">
+                  <label className="pack-inspector__diagnostics-toggle">
+                    <input type="checkbox" checked={showInfo} onChange={() => onToggleInfo()} />
+                    <span>Show info notices</span>
+                  </label>
+                  <label className="pack-inspector__diagnostics-toggle">
+                    <input
+                      type="checkbox"
+                      checked={showDetails}
+                      onChange={() => onToggleDetails()}
+                    />
+                    <span>Show detailed warnings</span>
+                  </label>
+                </div>
+              </div>
               <ul>
-                {errorIssues.map((issue) => (
-                  <li key={`diagnostic-error-${issue.message}`} className="pack-inspector__diagnostics-item pack-inspector__diagnostics-item--error">
-                    <span className="pack-inspector__diagnostic-tag">Error</span>
-                    <span>
-                      {issue.message}
-                      {issue.hint ? ` — ${issue.hint}` : ""}
-                    </span>
-                  </li>
-                ))}
-                {warningIssues.map((issue) => (
-                  <li key={`diagnostic-warning-${issue.message}`} className="pack-inspector__diagnostics-item pack-inspector__diagnostics-item--warning">
-                    <span className="pack-inspector__diagnostic-tag">Warning</span>
-                    <span>
-                      {issue.message}
-                      {issue.hint ? ` — ${issue.hint}` : ""}
-                    </span>
+                {sortedIssues.map((issue, index) => (
+                  <li
+                    key={`diagnostic-${index}`}
+                    className={`pack-inspector__diagnostics-item pack-inspector__diagnostics-item--${issue.severity}`}
+                  >
+                    <div className="pack-inspector__diagnostics-summary">
+                      <span className="pack-inspector__diagnostic-tag">
+                        {severityLabel[issue.severity]}
+                      </span>
+                      <span>
+                        {issue.message}
+                        {issue.hint ? ` — ${issue.hint}` : ""}
+                      </span>
+                    </div>
+                    {showDetails && issue.details && issue.details.length > 0 && (
+                      <ul className="pack-inspector__diagnostics-details">
+                        {issue.details.map((detail, detailIndex) => (
+                          <li key={`diagnostic-${index}-detail-${detailIndex}`}>{detail}</li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 ))}
               </ul>

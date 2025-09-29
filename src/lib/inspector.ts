@@ -105,7 +105,7 @@ function buildGapFillCsv(items: GapFillItem[], level: Level): string {
   return [header, ...rows].join("\n");
 }
 
-function buildMatchingCsv(items: MatchingItem[], level: Level): string {
+function buildMatchingSetCsv(items: MatchingItem[], level: Level): string {
   const header = "level,type,left,right,source,license,count";
   const rows = items.map((item) => {
     const left = item.pairs.map((pair) => pair.left).join("|");
@@ -122,6 +122,40 @@ function buildMatchingCsv(items: MatchingItem[], level: Level): string {
     return cells.map(csvEscape).join(",");
   });
   return [header, ...rows].join("\n");
+}
+
+function buildMatchingPairCsv(items: MatchingItem[], level: Level): string {
+  const header = "level,type,left,right,count,source,license,setId";
+  const rows: string[] = [];
+  items.forEach((item) => {
+    const setId = item.groupId ?? item.id;
+    const total = item.pairs.length.toString();
+    item.pairs.forEach((pair) => {
+      const cells = [
+        item.level ?? level,
+        item.type,
+        pair.left,
+        pair.right,
+        total,
+        item.source ?? "",
+        item.license ?? "",
+        setId,
+      ];
+      rows.push(cells.map((value) => csvEscape(value)).join(","));
+    });
+  });
+  return [header, ...rows].join("\n");
+}
+
+function buildMatchingCsv(
+  items: MatchingItem[],
+  level: Level,
+  shape: "set" | "pair" | "mixed",
+): string {
+  if (shape === "pair") {
+    return buildMatchingPairCsv(items, level);
+  }
+  return buildMatchingSetCsv(items, level);
 }
 
 function buildMcqCsv(items: McqItem[]): string {
@@ -166,10 +200,15 @@ function formatExportTimestamp(date: Date): string {
   return `${year}${month}${day}-${hours}${minutes}`;
 }
 
+interface CsvExportOptions {
+  matchingShape?: "set" | "pair" | "mixed" | null;
+}
+
 export function buildCsvExport(
   items: ExerciseItem[],
   type: ExerciseType,
   level: Level,
+  options: CsvExportOptions = {},
 ): { csv: string; filename: string } | null {
   if (items.length === 0) {
     return null;
@@ -181,7 +220,11 @@ export function buildCsvExport(
       csv = buildGapFillCsv(items as GapFillItem[], level);
       break;
     case "matching":
-      csv = buildMatchingCsv(items as MatchingItem[], level);
+      csv = buildMatchingCsv(
+        items as MatchingItem[],
+        level,
+        options.matchingShape === "pair" ? "pair" : "set",
+      );
       break;
     case "mcq":
       csv = buildMcqCsv(items as McqItem[]);

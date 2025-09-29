@@ -186,6 +186,8 @@ export function getDefaultInspectorState(): InspectorStateSnapshot {
     filters: getDefaultInspectorFilters(),
     hiddenIds: [],
     isOpen: true,
+    showDetails: false,
+    showInfo: false,
   };
 }
 
@@ -207,6 +209,14 @@ export function loadInspectorState(
           ? legacy.hiddenIds.filter((id): id is string => typeof id === "string")
           : [],
         isOpen: typeof legacy.isOpen === "boolean" ? legacy.isOpen : true,
+        showDetails:
+          typeof (legacy as Partial<InspectorStateSnapshot>).showDetails === "boolean"
+            ? Boolean((legacy as Partial<InspectorStateSnapshot>).showDetails)
+            : false,
+        showInfo:
+          typeof (legacy as Partial<InspectorStateSnapshot>).showInfo === "boolean"
+            ? Boolean((legacy as Partial<InspectorStateSnapshot>).showInfo)
+            : false,
       };
     }
     return getDefaultInspectorState();
@@ -217,11 +227,15 @@ export function loadInspectorState(
     ? stored.hiddenIds.filter((id): id is string => typeof id === "string")
     : [];
   const isOpen = typeof stored.isOpen === "boolean" ? stored.isOpen : true;
+  const showDetails = typeof stored.showDetails === "boolean" ? stored.showDetails : false;
+  const showInfo = typeof stored.showInfo === "boolean" ? stored.showInfo : false;
 
   return {
     filters,
     hiddenIds,
     isOpen,
+    showDetails,
+    showInfo,
   };
 }
 
@@ -238,6 +252,8 @@ export function saveInspectorState(
     filters: sanitizeFilters(state.filters),
     hiddenIds: [...state.hiddenIds],
     isOpen: Boolean(state.isOpen),
+    showDetails: Boolean(state.showDetails),
+    showInfo: Boolean(state.showInfo),
   };
 
   writeInspectorStateMap(map);

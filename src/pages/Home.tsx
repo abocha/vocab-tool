@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { loadExercises, type PackIssue } from "../lib/csv";
+import { loadExercises, type MatchingDiagnostics, type PackIssue } from "../lib/csv";
 import { applyInspectorFilters } from "../lib/inspector";
 import {
   getDefaultInspectorFilters,
@@ -57,6 +57,14 @@ export function Home() {
   const [hiddenItemIds, setHiddenItemIds] = useState<Set<string>>(() => new Set());
   const [isInspectorOpen, setIsInspectorOpen] = useState<boolean>(DEFAULT_INSPECTOR_STATE.isOpen);
   const [packFingerprint, setPackFingerprint] = useState<string | null>(null);
+  const [showInspectorDetails, setShowInspectorDetails] = useState<boolean>(
+    DEFAULT_INSPECTOR_STATE.showDetails,
+  );
+  const [showInspectorInfo, setShowInspectorInfo] = useState<boolean>(
+    DEFAULT_INSPECTOR_STATE.showInfo,
+  );
+  const [matchingDiagnostics, setMatchingDiagnostics] = useState<MatchingDiagnostics | null>(null);
+  const [matchingShape, setMatchingShape] = useState<"set" | "pair" | "mixed" | null>(null);
   const inspectorHydratedRef = useRef(false);
 
   useEffect(() => {
@@ -70,6 +78,8 @@ export function Home() {
       setState("loading");
       setErrorMessage(null);
       setPackFingerprint(null);
+      setMatchingDiagnostics(null);
+      setMatchingShape(null);
       try {
         const loaded = await loadExercises(settings.level, settings.exerciseType);
         if (cancelled) {
@@ -78,7 +88,9 @@ export function Home() {
         setItems(loaded.items);
         setPackIssues(loaded.issues);
         setRowCount(loaded.rowCount);
-         setPackFingerprint(loaded.fingerprint);
+        setPackFingerprint(loaded.fingerprint);
+        setMatchingDiagnostics(loaded.matchingDiagnostics ?? null);
+        setMatchingShape(loaded.matchingShape ?? null);
         setState("ready");
       } catch (error) {
         console.warn(error);
@@ -94,6 +106,8 @@ export function Home() {
           setState("error");
           setErrorMessage("Unable to load exercises. Please check that the CSV pack exists.");
           setPackFingerprint(null);
+          setMatchingDiagnostics(null);
+          setMatchingShape(null);
         }
       }
     }
@@ -111,12 +125,16 @@ export function Home() {
       setInspectorFilters(getDefaultInspectorFilters());
       setHiddenItemIds(new Set());
       setIsInspectorOpen(DEFAULT_INSPECTOR_STATE.isOpen);
+      setShowInspectorDetails(DEFAULT_INSPECTOR_STATE.showDetails);
+      setShowInspectorInfo(DEFAULT_INSPECTOR_STATE.showInfo);
       return;
     }
     const persisted = loadInspectorState(settings.level, settings.exerciseType, packFingerprint);
     setInspectorFilters({ ...persisted.filters });
     setHiddenItemIds(new Set(persisted.hiddenIds));
     setIsInspectorOpen(persisted.isOpen);
+    setShowInspectorDetails(persisted.showDetails);
+    setShowInspectorInfo(persisted.showInfo);
     inspectorHydratedRef.current = true;
   }, [packFingerprint, settings.level, settings.exerciseType]);
 
@@ -185,15 +203,49 @@ export function Home() {
     return { correct, total };
   }, [displayItems, progress]);
 
-  const warningIssues = useMemo(
-    () => packIssues.filter((issue) => issue.severity === "warning"),
-    [packIssues],
-  );
-
   const errorIssues = useMemo(
     () => packIssues.filter((issue) => issue.severity === "error"),
     [packIssues],
   );
+
+  const bannerIssues = useMemo(() => {
+    const order: Record<PackIssue["severity"], number> = {
+      error: 0,
+      warning: 1,
+      info: 2,
+    };
+    const filtered = packIssues.filter((issue) =>
+      issue.severity === "info" ? showInspectorInfo : true,
+    );
+    return filtered.sort((a, b) => order[a.severity] - order[b.severity]);
+  }, [packIssues, showInspectorInfo]);
+
+  const bannerSummary = useMemo(() => {
+    let summary = rowCount > 0
+      ? `Parsed ${rowCount} rows → ${items.length} valid → ${filteredItems.length} after filters. Showing ${displayItems.length} in session.`
+      : "No rows parsed from the CSV pack.";
+    if (settings.exerciseType === "matching" && matchingDiagnostics) {
+      summary = `${summary} Matching: sets ${matchingDiagnostics.setsBuilt}, dropped <2 pairs ${matchingDiagnostics.setsDroppedTooSmall}, mismatched ${matchingDiagnostics.rowsWithMismatchedLengths}, count metadata ${matchingDiagnostics.rowsWithOutOfRangeCount + matchingDiagnostics.rowsWithNonNumericCount}.`;
+    }
+    return summary;
+  }, [
+    rowCount,
+    items.length,
+    filteredItems.length,
+    displayItems.length,
+    settings.exerciseType,
+    matchingDiagnostics,
+  ]);
+
+  const bannerRole = bannerIssues.some((issue) => issue.severity === "error")
+    ? "alert"
+    : "status";
+
+  const severityLabel: Record<PackIssue["severity"], string> = {
+    error: "Error",
+    warning: "Warning",
+    info: "Info",
+  };
 
   const handleSettingsChange = useCallback((next: AppSettings) => {
     setSettings(next);
@@ -256,6 +308,14 @@ export function Home() {
     setIsInspectorOpen((prev) => !prev);
   }, []);
 
+  const handleToggleInspectorDetails = useCallback(() => {
+    setShowInspectorDetails((prev) => !prev);
+  }, []);
+
+  const handleToggleInspectorInfo = useCallback(() => {
+    setShowInspectorInfo((prev) => !prev);
+  }, []);
+
   useEffect(() => {
     if (!inspectorHydratedRef.current) {
       return;
@@ -268,11 +328,15 @@ export function Home() {
       filters: inspectorFilters,
       hiddenIds: Array.from(hiddenItemIds),
       isOpen: isInspectorOpen,
+      showDetails: showInspectorDetails,
+      showInfo: showInspectorInfo,
     });
   }, [
     inspectorFilters,
     hiddenItemIds,
     isInspectorOpen,
+    showInspectorDetails,
+    showInspectorInfo,
     packFingerprint,
     settings.level,
     settings.exerciseType,
@@ -377,25 +441,18 @@ export function Home() {
         matchingMaxPairs={matchingMaxPairs}
       />
       <main className="app-main" aria-live="polite">
-        {state === "ready" && (warningIssues.length > 0 || errorIssues.length > 0 || rowCount === 0) && (
-          <aside className="app-banner" role="status">
-            <div>
-              {rowCount > 0
-                ? `Parsed ${rowCount} rows → ${items.length} valid → ${filteredItems.length} after filters. Showing ${displayItems.length} in session.`
-                : "No rows parsed from the CSV pack."}
-            </div>
-            {(errorIssues.length > 0 || warningIssues.length > 0) && (
+        {state === "ready" && (bannerIssues.length > 0 || rowCount === 0) && (
+          <aside className="app-banner" role={bannerRole}>
+            <div>{bannerSummary}</div>
+            {bannerIssues.length > 0 && (
               <ul>
-                {errorIssues.map((issue) => (
-                  <li key={`error-${issue.message}`}>
-                    Error: {issue.message}
-                    {issue.hint ? ` (${issue.hint})` : ""}
-                  </li>
-                ))}
-                {warningIssues.map((issue) => (
-                  <li key={`warning-${issue.message}`}>
-                    Warning: {issue.message}
-                    {issue.hint ? ` (${issue.hint})` : ""}
+                {bannerIssues.map((issue, index) => (
+                  <li key={`banner-${index}`} className={`app-banner__item app-banner__item--${issue.severity}`}>
+                    <span className="app-banner__item-label">{severityLabel[issue.severity]}:</span>
+                    <span>
+                      {issue.message}
+                      {issue.hint ? ` (${issue.hint})` : ""}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -416,12 +473,18 @@ export function Home() {
         onClearHidden={handleClearHidden}
         isOpen={isInspectorOpen}
         onToggleOpen={handleToggleInspectorOpen}
+        showDetails={showInspectorDetails}
+        onToggleDetails={handleToggleInspectorDetails}
+        showInfo={showInspectorInfo}
+        onToggleInfo={handleToggleInspectorInfo}
         issues={packIssues}
         settings={settings}
         onSettingsChange={handleSettingsChange}
         level={settings.level}
         exerciseType={settings.exerciseType}
         rowCount={rowCount}
+        matchingDiagnostics={matchingDiagnostics}
+        matchingShape={matchingShape}
       />
       <Footer />
     </div>
