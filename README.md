@@ -68,6 +68,27 @@ Flags:
 - `--dest` (optional): destination directory. Defaults to `public/packs` inside the project.
 - `--sample` (optional): keep only the first N rows (after the header) of each CSV. Omit the flag to copy the full files.
 
+## Phase 2: Cards & Builders
+
+The Phase 2 pipeline turns the SimpleWiki corpus into reusable cards and then emits exercise CSVs that match the existing UI contracts. All steps are deterministic for the same inputs so regenerated packs remain diff-friendly.
+
+```bash
+# 1) Derive draft cards (examples + collocations) for a level
+npm run cards:draft -- --level A2 --limit 5000 --showSamples
+
+# 2) Build CSV packs from those cards
+npm run packs:from-cards -- --level A2 --limitGapfill 1200 --limitMatching 800 --limitMcq 1000
+
+# 3) Validate the outputs before shipping
+npm run packs:validate -- --dir public/packs/A2 --type auto
+```
+
+- `cards/draft_cards.jsonl` stores one JSON object per line with the schema described in `/docs/06-cards-data-model.md`.
+- The pack builders keep the same column headers and shapes defined in `/docs/03-csv-pack-spec.md`, and every CSV export is written with a UTF-8 BOM so Excel opens them without mangling characters.
+- The validator CLI summarises totals, drops, and heuristic warnings per file; it exits non-zero only when a file is unreadable or missing required headers.
+
+When iterating on the corpus heuristics, avoid renaming columns—the Pack Inspector and the React app expect the stable schemas shipped in Phase 1.
+
 ## Pack Inspector (teacher workflow)
 
 Open the “Pack Inspector” panel below the exercise view to curate the currently loaded level + exercise:
@@ -85,9 +106,9 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 - `npm run build` — type-check and produce a static build in `dist/`.
 - `npm run preview` — preview the production build locally.
 - `npm run prepare:packs` — copy/sample CSV packs (see above).
-- `npm run cards:draft` — **stub** CLI to adapt corpus CSVs into `cards/draft_cards.jsonl` (see docs/07-adapter-corpus-to-cards).
-- `npm run packs:from-cards` — **stub** CLI to emit exercise CSVs from card JSONL files (see docs/08-exercise-builders-from-cards.md).
-- `npm run packs:validate` — **stub** CLI that walks packs, prints row counts, and reminds you to run the heuristics from docs/09-validators.md once implemented.
+- `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (examples, collocations, frequency metadata).
+- `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards.
+- `npm run packs:validate` — run the pack validator summary over one or more levels.
 
 ## Deploying
 

@@ -9,9 +9,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "prepare:packs": "node ./scripts/prepare-packs.js",
-    "cards:draft": "node ./scripts/build-cards-from-corpus.js",
-    "packs:from-cards": "node ./scripts/build-packs-from-cards.js",
-    "packs:validate": "node ./scripts/validate-packs.js"
+    "cards:draft": "node ./scripts/corpus-to-cards.js --level A2",
+    "packs:from-cards": "node ./scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
+    "packs:validate": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto"
   },
   "dependencies": {
     "papaparse": "^5.5.3",
