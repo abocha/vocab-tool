@@ -34,7 +34,7 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
       .slice(0, pairLimit)
       .sort((a, b) => a - b);
     return selected.map((index) => item.pairs[index]);
-  }, [item.id, item.pairs, pairLimit]);
+  }, [item.pairs, pairLimit]);
 
   const [selections, setSelections] = useState<Record<number, string>>({});
   const [pairFeedback, setPairFeedback] = useState<Record<number, PairResult>>({});
@@ -43,7 +43,7 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
 
   const rightOptions = useMemo(
     () => shuffle(limitedPairs.map((pair) => pair.right)),
-    [item.id, limitedPairs],
+    [limitedPairs],
   );
 
   useEffect(() => {
@@ -83,7 +83,18 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
     ? Math.round((resultSummary.correct / resultSummary.total) * 100)
     : 0;
 
-  const showingSubset = item.pairs.length > limitedPairs.length;
+  const totalPairs = item.pairs.length;
+  const showingSubset = totalPairs > limitedPairs.length;
+
+  const subsetMessage = useMemo(() => {
+    if (!showingSubset) {
+      return "";
+    }
+    if (pairLimit && pairLimit > 0) {
+      return `Pairs per Set limit ${pairLimit} → showing ${limitedPairs.length} of ${totalPairs} pairs this round.`;
+    }
+    return `Showing ${limitedPairs.length} of ${totalPairs} pairs this round (sampled randomly).`;
+  }, [limitedPairs, pairLimit, showingSubset, totalPairs]);
 
   return (
     <div className="exercise">
@@ -133,8 +144,8 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
         </div>
       )}
       {showingSubset && (
-        <div className="exercise__meta" role="note">
-          Showing {limitedPairs.length} of {item.pairs.length} pairs this round (sampled randomly).
+        <div className="exercise__meta" role="note" aria-live="polite">
+          {subsetMessage}
         </div>
       )}
       <div className="exercise__actions">

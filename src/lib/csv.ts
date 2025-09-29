@@ -143,6 +143,8 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
   const items: MatchingItem[] = [];
   const groupedById = new Map<string, MatchingGroup>();
   const order: string[] = [];
+  const shapesSeen: Set<"set" | "pair"> = new Set();
+  let chunkedGroupCount = 0;
 
   type PendingSinglePair = {
     pair: MatchingPair;
@@ -215,6 +217,7 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
     const hasMultiple = leftOptions.length > 1 || rightOptions.length > 1;
 
     if (hasMultiple) {
+      shapesSeen.add("set");
       const pairCount = Math.min(leftOptions.length, rightOptions.length);
       if (leftOptions.length !== rightOptions.length) {
         collect.push({
@@ -241,8 +244,9 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
         });
       }
 
+      const identifier = setId || `row-${index + 1}`;
       const item = normalizeMatchingSet(
-        `row-${index + 1}`,
+        identifier,
         {
           pairs,
           source,
@@ -262,6 +266,8 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       left: leftOptions[0] ?? leftColumn,
       right: rightOptions[0] ?? rightColumn,
     };
+
+    shapesSeen.add("pair");
 
     if (setId) {
       if (!groupedById.has(setId)) {
@@ -327,6 +333,7 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       const item = normalizeMatchingSet(identifier, group, collect);
       if (item) {
         items.push(item);
+        chunkedGroupCount += 1;
       }
     });
   }
@@ -341,6 +348,22 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       items.push(item);
     }
   });
+
+  if (shapesSeen.has("set") && shapesSeen.has("pair")) {
+    collect.push({
+      severity: "warning",
+      message: "Matching pack mixes set-per-row and pair-per-row entries. Normalized automatically.",
+      hint: "Verify setId values to keep intended groupings together.",
+    });
+  }
+
+  if (chunkedGroupCount > 0) {
+    collect.push({
+      severity: "warning",
+      message: `Formed ${chunkedGroupCount} matching set(s) by chunking rows without setId.`,
+      hint: "Add a setId column to control pair grouping explicitly.",
+    });
+  }
 
   return items;
 }
@@ -431,8 +454,9 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
     const config: ParseRemoteConfig<RawRow> = {
       download: true,
       header: true,
-      skipEmptyLines: true,
-      worker: false,
+      skipEmptyLines: "greedy",
+      worker: true,
+      chunkSize: 64 * 1024,
       chunk: (results: ParseResult<RawRow>) => {
         rows.push(...results.data);
         if (results.errors && results.errors.length > 0) {
