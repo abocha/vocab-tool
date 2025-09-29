@@ -10,6 +10,7 @@ interface TopBarProps {
     total: number;
   };
   onResetProgress: () => void;
+  matchingMaxPairs: number;
 }
 
 const typeLabels: Record<AppSettings["exerciseType"], string> = {
@@ -26,7 +27,13 @@ const levelLabels: Record<AppSettings["level"], string> = {
   B2: "B2",
 };
 
-export function TopBar({ settings, onSettingsChange, stats, onResetProgress }: TopBarProps) {
+export function TopBar({
+  settings,
+  onSettingsChange,
+  stats,
+  onResetProgress,
+  matchingMaxPairs,
+}: TopBarProps) {
   const maxOptions = useMemo(
     () =>
       MAX_ITEMS_CHOICES.map((value) => ({
@@ -35,6 +42,17 @@ export function TopBar({ settings, onSettingsChange, stats, onResetProgress }: T
       })),
     [],
   );
+
+  const matchingPairOptions = useMemo(() => {
+    const options: Array<{ value: number; label: string }> = [
+      { value: 0, label: "All available" },
+    ];
+    const limit = matchingMaxPairs > 0 ? Math.min(5, matchingMaxPairs) : 5;
+    for (let value = 1; value <= limit; value += 1) {
+      options.push({ value, label: `${value}` });
+    }
+    return options;
+  }, [matchingMaxPairs]);
 
   const handleSettingChange = <Key extends keyof AppSettings>(key: Key, value: AppSettings[Key]) => {
     onSettingsChange({
@@ -106,6 +124,24 @@ export function TopBar({ settings, onSettingsChange, stats, onResetProgress }: T
             })}
           </select>
         </label>
+        {settings.exerciseType === "matching" && (
+          <label className="top-bar__field">
+            <span className="top-bar__label">Pairs per Set</span>
+            <select
+              value={settings.matchingPairLimit.toString()}
+              onChange={(event) => {
+                const parsed = Number.parseInt(event.target.value, 10);
+                handleSettingChange("matchingPairLimit", Number.isNaN(parsed) ? 0 : parsed);
+              }}
+            >
+              {matchingPairOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
       <div className="top-bar__group top-bar__group--right">
         <div className="top-bar__stats" aria-live="polite">

@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   font-family: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
   line-height: 1.5;
   font-weight: 400;
@@ -52,6 +52,7 @@ select {
   border-radius: 0.5rem;
   border: 1px solid #cbd5e1;
   background-color: #ffffff;
+  color: #1f2933;
   min-width: 0;
 }
 
@@ -241,12 +242,21 @@ button:focus-visible {
 
 .exercise__matching-row {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 0.5rem;
+  min-height: 2.5rem;
 }
 
 .exercise__matching-term {
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0 0.5rem;
+}
+
+.exercise__matching-row select {
+  min-height: 2.5rem;
 }
 
 .exercise__options {

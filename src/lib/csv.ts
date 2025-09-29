@@ -114,15 +114,6 @@ interface MatchingGroup {
   rawKeys: string[];
 }
 
-interface MatchingCountChunk {
-  expected: number;
-  rows: RawRow[];
-  pairs: MatchingPair[];
-  source?: string;
-  license?: string;
-  level?: Level;
-}
-
 function normalizeMatchingSet(
   identifier: string,
   group: MatchingGroup,
@@ -153,7 +144,54 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
   const groupedById = new Map<string, MatchingGroup>();
   const order: string[] = [];
 
-  let countChunk: MatchingCountChunk | null = null;
+  type PendingSinglePair = {
+    pair: MatchingPair;
+    source?: string;
+    license?: string;
+    level?: Level;
+    rawKey: string;
+    index: number;
+  };
+
+  const singlePairs: PendingSinglePair[] = [];
+
+  function planChunkSizes(total: number): number[] {
+    const sizes: number[] = [];
+    let remaining = total;
+
+    while (remaining > 0) {
+      if (remaining === 1) {
+        if (sizes.length > 0) {
+          sizes[sizes.length - 1] += 1;
+        } else {
+          sizes.push(1);
+        }
+        break;
+      }
+
+      if (remaining <= 5) {
+        sizes.push(remaining);
+        break;
+      }
+
+      const remainder = remaining % 4;
+      if (remainder === 1 && remaining >= 5) {
+        sizes.push(5);
+        remaining -= 5;
+        continue;
+      }
+      if (remainder === 2) {
+        sizes.push(3);
+        remaining -= 3;
+        continue;
+      }
+
+      sizes.push(4);
+      remaining -= 4;
+    }
+
+    return sizes;
+  }
 
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
@@ -171,7 +209,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
     const source = safeString(row.source);
     const license = safeString(row.license);
     const setId = safeString(row.setId ?? row.group ?? "");
-    const count = parseCount(row.count);
 
     const leftOptions = splitList(leftColumn);
     const rightOptions = splitList(rightColumn);
@@ -196,6 +233,14 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
         pairs.push({ left, right });
       }
 
+      const expectedCount = parseCount(row.count);
+      if (expectedCount !== null && expectedCount !== pairs.length) {
+        collect.push({
+          severity: "warning",
+          message: `Matching row ${index + 1} expected ${expectedCount} pairs but found ${pairs.length}.`,
+        });
+      }
+
       const item = normalizeMatchingSet(
         `row-${index + 1}`,
         {
@@ -210,7 +255,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       if (item) {
         items.push(item);
       }
-      countChunk = null;
       continue;
     }
 
@@ -236,77 +280,54 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       group.license = group.license || license;
       group.level = group.level || level;
       group.rawKeys.push(`${pair.left}->${pair.right}`);
-      countChunk = null;
       continue;
     }
 
-    if (count && count > 1) {
-      if (!countChunk || countChunk.pairs.length >= countChunk.expected) {
-        countChunk = {
-          expected: count,
-          rows: [],
-          pairs: [],
-          source,
-          license,
-          level,
-        };
-      }
-
-      const activeChunk = countChunk;
-      if (!activeChunk) {
-        continue;
-      }
-
-      activeChunk.rows.push(row);
-      activeChunk.pairs.push(pair);
-      activeChunk.source = activeChunk.source || source;
-      activeChunk.license = activeChunk.license || license;
-      activeChunk.level = activeChunk.level || level;
-
-      if (activeChunk.pairs.length === activeChunk.expected) {
-        const identifier = `chunk-${index + 1}`;
-        const item = normalizeMatchingSet(
-          identifier,
-          {
-            pairs: activeChunk.pairs,
-            source: activeChunk.source,
-            license: activeChunk.license,
-            level: activeChunk.level,
-            rawKeys: activeChunk.pairs.map((pair) => `${pair.left}->${pair.right}`),
-          },
-          collect,
-        );
-        if (item) {
-          items.push(item);
-        }
-        countChunk = null;
-      }
-      continue;
-    }
-
-    const identifier = `row-${index + 1}`;
-    const item = normalizeMatchingSet(
-      identifier,
-      {
-        pairs: [pair],
-        source,
-        license,
-        level,
-        rawKeys: [`${pair.left}->${pair.right}`],
-      },
-      collect,
-    );
-    if (item) {
-      items.push(item);
-    }
-    countChunk = null;
+    singlePairs.push({
+      pair,
+      source: source || undefined,
+      license: license || undefined,
+      level: level || undefined,
+      rawKey: `${pair.left}->${pair.right}`,
+      index,
+    });
   }
 
-  const trailingChunk: MatchingCountChunk | null = countChunk;
-  if (trailingChunk && trailingChunk.pairs.length > 0) {
+  if (singlePairs.length === 1) {
+    const onlyPair = singlePairs[0];
     collect.push({
       severity: "warning",
-      message: `Last matching set expected ${trailingChunk.expected} pairs but found ${trailingChunk.pairs.length}. The partial set was skipped.`,
+      message: `Matching row ${onlyPair.index + 1} could not form a multi-pair set and was skipped.`,
+    });
+  } else if (singlePairs.length > 1) {
+    const chunkSizes = planChunkSizes(singlePairs.length);
+    let cursor = 0;
+
+    chunkSizes.forEach((size) => {
+      const slice = singlePairs.slice(cursor, cursor + size);
+      cursor += size;
+      if (slice.length < 2) {
+        if (slice.length === 1) {
+          collect.push({
+            severity: "warning",
+            message: `Matching row ${slice[0].index + 1} was skipped because it did not have enough pairs to form a set.`,
+          });
+        }
+        return;
+      }
+
+      const identifier = `chunk-${slice[0].index + 1}`;
+      const group: MatchingGroup = {
+        pairs: slice.map((entry) => entry.pair),
+        source: slice.find((entry) => Boolean(entry.source))?.source,
+        license: slice.find((entry) => Boolean(entry.license))?.license,
+        level: slice.find((entry) => Boolean(entry.level))?.level,
+        rawKeys: slice.map((entry) => entry.rawKey),
+      };
+      const item = normalizeMatchingSet(identifier, group, collect);
+      if (item) {
+        items.push(item);
+      }
     });
   }
 

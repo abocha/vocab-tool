@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   exerciseType: "gapfill",
   shuffle: false,
   maxItems: 20,
+  matchingPairLimit: 0,
 };
 
 function isBrowser(): boolean {

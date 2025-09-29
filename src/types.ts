@@ -48,6 +48,7 @@ export interface AppSettings {
   exerciseType: ExerciseType;
   shuffle: boolean;
   maxItems: number | "all";
+  matchingPairLimit: number;
 }
 
 export interface ProgressEntry {

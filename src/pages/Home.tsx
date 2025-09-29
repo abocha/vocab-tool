@@ -120,6 +120,18 @@ export function Home() {
     return nextItems;
   }, [filteredItems, settings.shuffle, settings.maxItems]);
 
+  const matchingMaxPairs = useMemo(() => {
+    if (items.length === 0) {
+      return 0;
+    }
+    return items.reduce((maxPairs, current) => {
+      if (current.type !== "matching") {
+        return maxPairs;
+      }
+      return Math.max(maxPairs, current.pairs.length);
+    }, 0);
+  }, [items]);
+
   useEffect(() => {
     setDisplayItems(preparedItems);
     setCurrentIndex(0);
@@ -205,6 +217,18 @@ export function Home() {
     setHiddenItemIds(new Set());
   }, []);
 
+  useEffect(() => {
+    if (settings.exerciseType !== "matching") {
+      return;
+    }
+    if (matchingMaxPairs === 0) {
+      return;
+    }
+    if (settings.matchingPairLimit !== 0 && settings.matchingPairLimit > matchingMaxPairs) {
+      handleSettingsChange({ ...settings, matchingPairLimit: 0 });
+    }
+  }, [settings, matchingMaxPairs, handleSettingsChange]);
+
   let content: React.ReactNode = null;
 
   if (state === "loading") {
@@ -246,6 +270,7 @@ export function Home() {
             onResult={(result) => handleResult(currentItem, result)}
             onNext={handleNext}
             existingResult={existingResult}
+            pairLimit={settings.matchingPairLimit}
           />
         );
         break;
@@ -288,6 +313,7 @@ export function Home() {
         onSettingsChange={handleSettingsChange}
         stats={stats}
         onResetProgress={handleResetProgress}
+        matchingMaxPairs={matchingMaxPairs}
       />
       <main className="app-main" aria-live="polite">
         {state === "ready" && (warningIssues.length > 0 || rowCount === 0) && (
