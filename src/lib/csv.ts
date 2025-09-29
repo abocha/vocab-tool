@@ -25,6 +25,8 @@ const REQUIRED_HEADERS: Record<ExerciseType, string[]> = {
   scramble: ["level", "type", "prompt", "answer"],
 };
 
+const MAX_DECLARED_MATCHING_SET_SIZE = 12;
+
 function safeString(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -197,7 +199,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
   const groupedById = new Map<string, MatchingGroup>();
   const order: string[] = [];
   const shapesSeen: Set<"set" | "pair"> = new Set();
-  let chunkedGroupCount = 0;
   let pendingCountGroup: MatchingGroup | null = null;
   let pendingCountExpected: number | null = null;
   let pendingCountIdentifier: string | null = null;
@@ -285,6 +286,10 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
     const license = safeString(row.license);
     const setId = safeString(row.setId ?? row.group ?? "");
     const declaredCount = parseCount(row.count);
+    const useDeclaredCount =
+      declaredCount !== null &&
+      declaredCount >= 2 &&
+      declaredCount <= MAX_DECLARED_MATCHING_SET_SIZE;
 
     const leftOptions = splitList(leftColumn);
     const rightOptions = splitList(rightColumn);
@@ -363,7 +368,7 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       continue;
     }
 
-    if (declaredCount !== null) {
+    if (useDeclaredCount) {
       if (
         !pendingCountGroup ||
         (pendingCountExpected !== null && pendingCountGroup.pairs.length >= pendingCountExpected)
@@ -390,14 +395,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
           rawKeys: [],
         };
         pendingCountExpected = declaredCount;
-      } else if (
-        pendingCountExpected !== null &&
-        declaredCount !== pendingCountExpected
-      ) {
-        collect.push({
-          severity: "warning",
-          message: `Matching row ${index + 1} declared count ${declaredCount} but current set expects ${pendingCountExpected}.`,
-        });
       }
 
       if (pendingCountGroup) {
@@ -477,7 +474,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       const item = normalizeMatchingSet(identifier, group, collect);
       if (item) {
         items.push(item);
-        chunkedGroupCount += 1;
       }
     });
   }
@@ -509,14 +505,6 @@ function buildMatchingRows(rows: RawRow[], collect: ReturnType<typeof createIssu
       severity: "warning",
       message: "Matching pack mixes set-per-row and pair-per-row entries. Normalized automatically.",
       hint: "Verify setId values to keep intended groupings together.",
-    });
-  }
-
-  if (chunkedGroupCount > 0) {
-    collect.push({
-      severity: "warning",
-      message: `Formed ${chunkedGroupCount} matching set(s) by chunking rows without setId.`,
-      hint: "Add a setId column to control pair grouping explicitly.",
     });
   }
 
