@@ -17,7 +17,6 @@ import {
 
 const GAPFILL_MIN_LENGTH = 40;
 const GAPFILL_MAX_LENGTH = 120;
-const MATCHING_MIN_PAIRS = 2;
 const REQUIRED_HEADERS = {
   gapfill: ["level", "type", "prompt", "answer", "source", "license"],
   matching: ["level", "type", "left", "right", "source", "license"],
@@ -256,88 +255,61 @@ function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
 function createMatchingState() {
   return {
     total: 0,
-    keptSets: 0,
     keptPairs: 0,
     drops: {
       missing: 0,
-      tooFewPairs: 0,
       duplicate: 0,
       attribution: 0,
+      deprecated_set_per_row: 0,
     },
-    mismatchedPairs: 0,
-    dedupedPairs: 0,
-    seenSets: new Set(),
     seenPairs: new Set(),
   };
 }
 
 function evaluateMatchingRow(row, state, filterConfig, filterSummary) {
-  state.total += 1;
-  const rawLeft = row.left ?? row["left"];
-  const rawRight = row.right ?? row["right"];
-  const left = parsePipeList(rawLeft);
-  const right = parsePipeList(rawRight);
-  if (left.length === 0 || right.length === 0) {
+  const rawLeft = safeString(row.left ?? row["left"]);
+  const rawRight = safeString(row.right ?? row["right"]);
+  if (!rawLeft || !rawRight) {
+    state.total += 1;
     state.drops.missing += 1;
     return;
   }
   const attributionMissing = !safeString(row.source ?? row["source"]) || !safeString(row.license ?? row["license"]);
   if (attributionMissing) {
+    state.total += 1;
     state.drops.attribution += 1;
     return;
   }
 
-  const isSetRow = safeString(rawLeft).includes("|") || safeString(rawRight).includes("|") || left.length > 1 || right.length > 1;
+  const leftParts = parsePipeList(rawLeft);
+  const rightParts = parsePipeList(rawRight);
+  const isDeprecated = rawLeft.includes("|") || rawRight.includes("|") || leftParts.length > 1 || rightParts.length > 1;
 
-  if (!isSetRow) {
-    const pairKey = `${normalizeText(left[0])}|${normalizeText(right[0])}`;
-    if (state.seenPairs.has(pairKey)) {
-      state.drops.duplicate += 1;
-      return;
-    }
-    state.seenPairs.add(pairKey);
-    const sentence = `the ${left[0]} ${right[0]}`;
-    const tokens = [
-      { surface: "the", normalized: "the", index: 0 },
-      { surface: left[0], normalized: left[0].toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
-      { surface: right[0], normalized: right[0].toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
-    ];
-    evaluateSurface({
-      surface: left[0],
-      tokens,
-      index: 1,
-      sentence,
-      filterConfig,
-      dropSummary: filterSummary,
-    });
-    evaluateSurface({
-      surface: right[0],
-      tokens,
-      index: 2,
-      sentence,
-      filterConfig,
-      dropSummary: filterSummary,
-    });
-    checkUnsafeText(sentence, filterConfig, filterSummary);
-    state.keptPairs += 1;
+  if (isDeprecated) {
+    state.drops.deprecated_set_per_row += 1;
+    recordDrop(filterSummary, "deprecated_set_per_row", `${rawLeft} :: ${rawRight}`);
+  }
+
+  const pairCount = isDeprecated ? Math.min(leftParts.length, rightParts.length) : 1;
+  const effectiveTotal = Math.max(isDeprecated ? pairCount : 1, 1);
+  state.total += effectiveTotal;
+  if (pairCount === 0) {
+    state.drops.missing += 1;
     return;
   }
 
-  const pairCount = Math.min(left.length, right.length);
-  if (left.length !== right.length) {
-    state.mismatchedPairs += 1;
-  }
-  const pairs = [];
-  const seenPairs = new Set();
   for (let i = 0; i < pairCount; i += 1) {
-    const leftValue = left[i];
-    const rightValue = right[i];
-    const key = `${normalizeText(leftValue)}|${normalizeText(rightValue)}`;
-    if (seenPairs.has(key)) {
-      state.dedupedPairs += 1;
+    const leftValue = isDeprecated ? leftParts[i] : leftParts[0] ?? rawLeft;
+    const rightValue = isDeprecated ? rightParts[i] : rightParts[0] ?? rawRight;
+    if (!leftValue || !rightValue) {
       continue;
     }
-    seenPairs.add(key);
+    const key = `${normalizeText(leftValue)}|${normalizeText(rightValue)}`;
+    if (state.seenPairs.has(key)) {
+      state.drops.duplicate += 1;
+      continue;
+    }
+    state.seenPairs.add(key);
     const sentence = `the ${leftValue} ${rightValue}`;
     const tokens = [
       { surface: "the", normalized: "the", index: 0 },
@@ -361,21 +333,11 @@ function evaluateMatchingRow(row, state, filterConfig, filterSummary) {
       dropSummary: filterSummary,
     });
     checkUnsafeText(sentence, filterConfig, filterSummary);
-    pairs.push({ left: leftValue, right: rightValue });
+    state.keptPairs += 1;
+    if (!isDeprecated) {
+      break;
+    }
   }
-  if (pairs.length < MATCHING_MIN_PAIRS) {
-    state.drops.tooFewPairs += 1;
-    return;
-  }
-  const setKey = pairs
-    .map((pair) => `${normalizeText(pair.left)}|${normalizeText(pair.right)}`)
-    .join("||");
-  if (state.seenSets.has(setKey)) {
-    state.drops.duplicate += 1;
-    return;
-  }
-  state.seenSets.add(setKey);
-  state.keptSets += 1;
 }
 
 function createMcqState() {
@@ -577,11 +539,9 @@ async function analyzeFile({ filePath, type }, filterConfig) {
       type,
       fatal,
       total: matchingState.total,
-      kept: matchingState.keptSets + matchingState.keptPairs,
+      kept: matchingState.keptPairs,
       drops: matchingState.drops,
-      mismatchedPairs: matchingState.mismatchedPairs,
-      dedupedPairs: matchingState.dedupedPairs,
-      keptAsPairs: matchingState.keptPairs,
+      deprecatedSetRows: matchingState.drops.deprecated_set_per_row ?? 0,
       filterSummary,
     };
   }
@@ -635,10 +595,8 @@ function formatSummary(results, combinedFilters) {
     dropped: result.total != null && result.kept != null ? result.total - result.kept : 0,
     drops: result.drops ?? {},
     notes: {
-      mismatchedPairs: result.mismatchedPairs ?? 0,
-      dedupedPairs: result.dedupedPairs ?? 0,
+      deprecatedSetRows: result.deprecatedSetRows ?? 0,
       nearDuplicateOptions: result.nearDuplicateOptions ?? 0,
-      keptPairRows: result.keptAsPairs ?? 0,
     },
     skipped: result.skipped ?? null,
     error: result.error ?? null,

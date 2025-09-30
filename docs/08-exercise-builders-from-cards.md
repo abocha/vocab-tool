@@ -9,7 +9,7 @@ Pure functions that emit CSVs in the MVP app format from a list of `Card` object
 - `buildGapFill(cards)` → `gapfill.csv`
   - Use card examples; blank exactly one target token.
 - `buildMatching(cards)` → `matching.csv`
-  - Compose sets from collocations (left/right); support both pack shapes.
+  - Emit one collocate/lemma pair per row. The frontend groups pairs into sets at render time.
 - `buildMCQ(cards)` → `mcq.csv`
   - Use example cloze; distractors from card’s distractors or collocation neighbors with same POS.
 - `buildScramble(sentences)` → `scramble.csv`

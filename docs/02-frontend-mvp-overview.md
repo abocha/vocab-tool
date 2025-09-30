@@ -20,10 +20,11 @@
 - Fetch CSV → parse (PapaParse) → normalize → in-memory list.
 - Item ID = stable hash of `{type|prompt|answer}` (or equivalent).
 - Progress: `localStorage` under `esl-vocab-mvp/*`.
+- Matching packs load as flat pairs; grouping into sets happens at render time using a deterministic seed (URL `?seed` overrides, `localStorage` stores `matching.setSize`).
 
 ## Known Gaps (to iterate)
 
-- Matching UX: support both “pair-per-row” and “set-per-row”.
+- Matching UX: legacy set-per-row CSVs still load with a warning; consider removing support once packs are migrated.
 - Empty/error states: clear messages; retry affordance.
 - Large CSVs: sampling and pagination toggles (client-side).
 - Basic a11y sanity checks (labels, ARIA where needed).

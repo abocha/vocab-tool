@@ -19,16 +19,18 @@ export interface GapFillItem extends ExerciseBase {
 }
 
 export interface MatchingPair {
+  level?: Level | string;
   left: string;
   right: string;
+  source?: string;
+  license?: string;
 }
 
 export interface MatchingItem extends ExerciseBase {
   type: "matching";
   pairs: MatchingPair[];
-  freq?: number | null;
-  origin?: "set" | "pair";
-  groupId?: string;
+  seed?: string;
+  setId?: string;
 }
 
 export interface McqItem extends ExerciseBase {
@@ -51,7 +53,6 @@ export interface AppSettings {
   exerciseType: ExerciseType;
   shuffle: boolean;
   maxItems: number | "all";
-  matchingPairLimit: number;
 }
 
 export interface ProgressEntry {

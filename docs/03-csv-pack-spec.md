@@ -20,14 +20,12 @@
 ### 2) Matching
 
 - **File:** `matching.csv`
-- **Two Supported Shapes** (app must support **both**):
-  - **Set-per-row (CURRENT APP DEFAULT):**  
-    `level, type(matching), left, right, source, license, count`  
-    where `left` is `a|b|c` and `right` is `x|y|z` (order aligned by index).
-  - **Pair-per-row (PIPELINE-FRIENDLY):**  
-    `level, type(matching), left, right, source, license, count`  
-    one pair per row; multiple rows form a set in UI.
-- **Notes:** When both forms appear, treat pair-per-row grouped by `setId` if present, else by chunking.
+- **Canonical shape:** one pair per row.  
+  Columns: `level, type(matching), left, right, source, license, count`.
+- **Notes:**
+  - `left` is the prompt/collocate; `right` is the target lemma. Each row represents exactly one pair.
+  - `count` is optional metadata (often left blank). The frontend derives its own grouping, so this value is not used for set sizing.
+  - The app still detects legacy set-per-row rows (`a|b|c`) for backward compatibility. They are split into individual pairs, a warning banner is shown, and `packs-validate` reports them under `deprecated_set_per_row`. Prefer converting legacy files with `npm run packs:convert:matching` (see helper script) before publishing.
 
 ### 3) MCQ
 

@@ -7,7 +7,6 @@ interface MatchingProps {
   onResult: (correct: boolean) => void;
   onNext: () => void;
   existingResult?: boolean;
-  pairLimit?: number;
 }
 
 type PairResult = "correct" | "incorrect" | null;
@@ -30,20 +29,8 @@ function deterministicShuffle<T>(values: T[], seed: string): T[] {
   return order.map((index) => values[index]);
 }
 
-export function Matching({ item, onResult, onNext, existingResult, pairLimit }: MatchingProps) {
-  const limitedPairs = useMemo(() => {
-    const totalPairs = item.pairs.length;
-    if (pairLimit == null || Number.isNaN(pairLimit) || pairLimit <= 0) {
-      return item.pairs;
-    }
-    if (pairLimit >= totalPairs) {
-      return item.pairs;
-    }
-    const indices = getDeterministicOrder(item.pairs.length, `${item.id}:pairs`);
-    const selected = indices.slice(0, pairLimit).sort((a, b) => a - b);
-    return selected.map((index) => item.pairs[index]);
-  }, [item.id, item.pairs, pairLimit]);
-
+export function Matching({ item, onResult, onNext, existingResult }: MatchingProps) {
+  const limitedPairs = item.pairs;
   const [selections, setSelections] = useState<Record<number, string>>({});
   const [pairFeedback, setPairFeedback] = useState<Record<number, PairResult>>({});
   const [checked, setChecked] = useState(false);
@@ -59,7 +46,7 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
     setPairFeedback({});
     setChecked(false);
     setResultSummary({ correct: 0, total: limitedPairs.length });
-  }, [item.id, pairLimit, limitedPairs]);
+  }, [item.id, limitedPairs]);
 
   const handleSelection = (index: number, value: string) => {
     setSelections((prev) => ({
@@ -90,19 +77,6 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
   const percentage = resultSummary.total
     ? Math.round((resultSummary.correct / resultSummary.total) * 100)
     : 0;
-
-  const totalPairs = item.pairs.length;
-  const showingSubset = totalPairs > limitedPairs.length;
-
-  const subsetMessage = useMemo(() => {
-    if (!showingSubset) {
-      return "";
-    }
-    if (pairLimit && pairLimit > 0) {
-      return `Showing ${limitedPairs.length} of ${totalPairs} pairs (Pairs per Set limit ${pairLimit}).`;
-    }
-    return `Showing ${limitedPairs.length} of ${totalPairs} pairs this round (sampled randomly).`;
-  }, [limitedPairs, pairLimit, showingSubset, totalPairs]);
 
   return (
     <div className="exercise">
@@ -149,11 +123,6 @@ export function Matching({ item, onResult, onNext, existingResult, pairLimit }: 
       {existingResult && (
         <div className="exercise__note" role="status">
           Previously answered correctly.
-        </div>
-      )}
-      {showingSubset && (
-        <div className="exercise__meta" role="note" aria-live="polite">
-          {subsetMessage}
         </div>
       )}
       <div className="exercise__actions">

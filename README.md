@@ -41,18 +41,13 @@ public/packs/
 
 Each CSV must include the headers defined by the corpus pipeline (see `/docs/03-csv-pack-spec.md` and `/src/lib/csv.ts`). Missing files are skipped gracefully and surfaced as warnings in the UI banner.
 
-### Matching data shapes
+### Matching data shape
 
-The Matching exercise now accepts both CSV variants and normalises them into a single in-memory structure:
-
-- **Set-per-row** — single row with pipe-delimited `left`/`right` lists. The loader honours the declared `count` column and surfaces mismatches.
-- **Pair-per-row** — one pair per row; rows are grouped by `setId` when present, otherwise chunked deterministically so the UI still renders sets.
-
-When both shapes appear in the same file, the inspector banner calls it out so you can review the grouping. Learners still receive the same scoring UX: set score, overall % score, and an explicit note if the `Pairs per Set` limit sampled a subset of the available pairs.
-
-- The optional `count` column is treated as frequency metadata (not a set size). Actual set size is derived from the parsed pairs; the “Pairs per Set” control caps how many are shown.
-- Diagnostics are summarised (counts by issue). Toggle “Show info notices” / “Show detailed warnings” in the inspector to reveal optional metadata notes and up to five representative sample rows per issue type.
-- Sampling is deterministic per dataset + set identifier, so a given `Pairs per Set` limit pulls the same subset until the data changes.
+- **Canonical CSV:** one pair per row (`level,type,left,right,source,license,count`). Sets are formed in the UI at render time.
+- **Legacy CSVs:** set-per-row files still load, but every legacy row triggers a banner (`deprecated_set_per_row`) and the validator warns unless converted. Use `npm run packs:convert:matching` to rewrite old packs into the canonical format.
+- **Deterministic grouping:** the Matching view shuffles pairs with a stable seed (`matching|<file>|<level>|<pairCount>`). Supply `?seed=<value>` for reproducible sessions; the TopBar shows a copyable badge when a seed override is active.
+- **Pairs per Set control:** numeric input (2–12, default 6) stored in `localStorage` (`matching.setSize`). A `?set=<value>` query parameter overrides the stored value for the current session.
+- **Diagnostics:** inspector summaries highlight duplicate pairs, legacy rows, and other loader warnings with representative samples when available.
 
 ### Copying or Sampling Packs
 
@@ -95,8 +90,8 @@ When iterating on the corpus heuristics, avoid renaming columns—the Pack Inspe
 Open the “Pack Inspector” panel below the exercise view to curate the currently loaded level + exercise:
 
 - Filter by substring and length range, hide/restore individual items, and see live counts (parsed → filtered → displayed). Filters + hidden IDs persist per `(level, type)` in `localStorage` for quick revisits.
-- Toggle Shuffle, Max Items, and (for matching packs) the `Pairs per Set` limit without leaving the inspector. These settings drive the learner view immediately and also persist.
-- Export the curated subset to CSV directly in the browser. Files are named like `matching.curated.A2.20250304-1030.csv`, include a UTF-8 BOM for Excel compatibility, and preserve the original schema for each exercise type (matching exports use the set-per-row form).
+- Toggle Shuffle, Max Items, and (for matching packs) the numeric “Pairs per Set” control (2–12). The value persists to `matching.setSize` unless a `?set` query parameter is present.
+- Export the curated subset to CSV directly in the browser. Files are named like `matching.curated.A2.20250304-1030.csv`, include a UTF-8 BOM for Excel compatibility, and preserve the canonical schemas (matching exports are pair-per-row).
 - Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card. Enable “Show info notices” and “Show detailed warnings” to reveal optional metadata notes and up to five concrete examples per issue type.
 
 The top-of-page banner also surfaces parse warnings and errors (missing columns, skipped rows, empty files) so malformed packs never crash the app—the UI simply falls back to a friendly empty state.
@@ -111,10 +106,12 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 - `npm run cards:filter` — regenerate cards with the default safety filters.
 - `npm run cards:filter:strict` — regenerate cards with the school-safe profile.
 - `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards.
+- `npm run packs:from-cards:matching` — build just the matching CSV (pair-per-row) for the requested level.
 - `npm run packs:from-cards:safe` — build packs with the default guards.
 - `npm run packs:from-cards:strict` — build packs with the school-safe profile.
 - `npm run packs:validate` — run the pack validator summary over one or more levels.
 - `npm run packs:validate:strict` — validator in school-safe mode with strict exit on guard hits.
+- `npm run packs:convert:matching` — convert a legacy set-per-row matching CSV into the canonical pair-per-row format.
 
 ### SFW Profiles
 

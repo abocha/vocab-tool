@@ -2,14 +2,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { loadExercises, type MatchingDiagnostics, type PackIssue } from "../lib/csv";
 import { applyInspectorFilters } from "../lib/inspector";
 import {
+  clampSetSize,
+  DEFAULT_MATCHING_SET_SIZE,
+  deriveMatchingSeed,
+  groupPairsIntoSets,
+} from "../lib/matching";
+import { createItemId } from "../lib/id";
+import {
   getDefaultInspectorFilters,
   getDefaultInspectorState,
   getDefaultSettings,
   loadInspectorState,
   loadProgress,
   loadSettings,
+  loadMatchingSetSize,
   recordProgress,
   resetProgress,
+  saveMatchingSetSize,
   saveInspectorState,
   saveSettings,
 } from "../lib/storage";
@@ -17,6 +26,8 @@ import type {
   AppSettings,
   ExerciseItem,
   InspectorFilters,
+  MatchingItem,
+  MatchingPair,
   ProgressMap,
 } from "../types";
 import { TopBar } from "../components/TopBar";
@@ -39,6 +50,35 @@ function shuffleItems<T>(items: T[]): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+function buildMatchingItemsFromPairs({
+  pairs,
+  setSize,
+  seed,
+  level,
+}: {
+  pairs: MatchingPair[];
+  setSize: number;
+  seed: string;
+  level: AppSettings["level"];
+}): MatchingItem[] {
+  const grouped = groupPairsIntoSets(pairs, setSize, seed);
+  return grouped.map((group, index) => {
+    const key = group.map((pair) => `${pair.left}|${pair.right}`).join("||");
+    const id = createItemId("matching", `${seed}|${index}|${key}`);
+    const first = group[0];
+    return {
+      id,
+      type: "matching",
+      pairs: group,
+      seed,
+      setId: `${index}`,
+      source: first?.source,
+      license: first?.license,
+      level: (first?.level as AppSettings["level"]) ?? level,
+    };
+  });
 }
 
 export function Home() {
@@ -64,11 +104,45 @@ export function Home() {
     DEFAULT_INSPECTOR_STATE.showInfo,
   );
   const [matchingDiagnostics, setMatchingDiagnostics] = useState<MatchingDiagnostics | null>(null);
-  const [matchingShape, setMatchingShape] = useState<"set" | "pair" | "mixed" | null>(null);
+  const [matchingPairs, setMatchingPairs] = useState<MatchingPair[]>([]);
+  const [matchingSetSize, setMatchingSetSize] = useState<number>(DEFAULT_MATCHING_SET_SIZE);
+  const [matchingSeed, setMatchingSeed] = useState<string | null>(null);
+  const urlSetSizeRef = useRef<number | null>(null);
+  const urlSeedRef = useRef<string | null>(null);
   const inspectorHydratedRef = useRef(false);
 
   useEffect(() => {
     setSettings(loadSettings());
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const setParam = params.get("set");
+    const seedParam = params.get("seed");
+
+    let initialSize = DEFAULT_MATCHING_SET_SIZE;
+    if (setParam) {
+      const parsed = Number.parseInt(setParam, 10);
+      if (!Number.isNaN(parsed)) {
+        const clamped = clampSetSize(parsed);
+        urlSetSizeRef.current = clamped;
+        initialSize = clamped;
+      }
+    } else {
+      const stored = loadMatchingSetSize();
+      if (stored != null) {
+        initialSize = clampSetSize(stored);
+      }
+    }
+    setMatchingSetSize(initialSize);
+
+    if (seedParam) {
+      urlSeedRef.current = seedParam;
+      setMatchingSeed(seedParam);
+    }
   }, []);
 
   useEffect(() => {
@@ -79,18 +153,40 @@ export function Home() {
       setErrorMessage(null);
       setPackFingerprint(null);
       setMatchingDiagnostics(null);
-      setMatchingShape(null);
       try {
         const loaded = await loadExercises(settings.level, settings.exerciseType);
         if (cancelled) {
           return;
         }
-        setItems(loaded.items);
+        if (settings.exerciseType === "matching") {
+          const pairs = loaded.matchingPairs ?? [];
+          setMatchingPairs(pairs);
+          const derivedSeed =
+            urlSeedRef.current ??
+            deriveMatchingSeed({
+              level: settings.level,
+              fileName: "matching.csv",
+              pairCount: pairs.length,
+              fingerprint: loaded.fingerprint,
+            });
+          setMatchingSeed(derivedSeed);
+          const effectiveSize = clampSetSize(urlSetSizeRef.current ?? matchingSetSize);
+          const grouped = buildMatchingItemsFromPairs({
+            pairs,
+            setSize: effectiveSize,
+            seed: derivedSeed,
+            level: settings.level,
+          });
+          setItems(grouped);
+        } else {
+          setMatchingPairs([]);
+          setMatchingSeed(null);
+          setItems(loaded.items);
+        }
         setPackIssues(loaded.issues);
         setRowCount(loaded.rowCount);
         setPackFingerprint(loaded.fingerprint);
         setMatchingDiagnostics(loaded.matchingDiagnostics ?? null);
-        setMatchingShape(loaded.matchingShape ?? null);
         setState("ready");
       } catch (error) {
         console.warn(error);
@@ -107,7 +203,6 @@ export function Home() {
           setErrorMessage("Unable to load exercises. Please check that the CSV pack exists.");
           setPackFingerprint(null);
           setMatchingDiagnostics(null);
-          setMatchingShape(null);
         }
       }
     }
@@ -118,6 +213,38 @@ export function Home() {
       cancelled = true;
     };
   }, [settings.level, settings.exerciseType]);
+
+  useEffect(() => {
+    if (settings.exerciseType !== "matching") {
+      return;
+    }
+    const seedToUse =
+      urlSeedRef.current ??
+      matchingSeed ??
+      deriveMatchingSeed({
+        level: settings.level,
+        fileName: "matching.csv",
+        pairCount: matchingPairs.length,
+        fingerprint: packFingerprint,
+      });
+    if (matchingSeed == null && seedToUse) {
+      setMatchingSeed(seedToUse);
+    }
+    const grouped = buildMatchingItemsFromPairs({
+      pairs: matchingPairs,
+      setSize: matchingSetSize,
+      seed: seedToUse,
+      level: settings.level,
+    });
+    setItems(grouped);
+  }, [
+    settings.exerciseType,
+    matchingPairs,
+    matchingSetSize,
+    matchingSeed,
+    settings.level,
+    packFingerprint,
+  ]);
 
   useEffect(() => {
     inspectorHydratedRef.current = false;
@@ -153,18 +280,6 @@ export function Home() {
     }
     return nextItems;
   }, [filteredItems, settings.shuffle, settings.maxItems]);
-
-  const matchingMaxPairs = useMemo(() => {
-    if (items.length === 0) {
-      return 0;
-    }
-    return items.reduce((maxPairs, current) => {
-      if (current.type !== "matching") {
-        return maxPairs;
-      }
-      return Math.max(maxPairs, current.pairs.length);
-    }, 0);
-  }, [items]);
 
   useEffect(() => {
     setDisplayItems(preparedItems);
@@ -225,7 +340,7 @@ export function Home() {
       ? `Parsed ${rowCount} rows → ${items.length} valid → ${filteredItems.length} after filters. Showing ${displayItems.length} in session.`
       : "No rows parsed from the CSV pack.";
     if (settings.exerciseType === "matching" && matchingDiagnostics) {
-      summary = `${summary} Matching: sets ${matchingDiagnostics.setsBuilt}, dropped <2 pairs ${matchingDiagnostics.setsDroppedTooSmall}, mismatched ${matchingDiagnostics.rowsWithMismatchedLengths}, count metadata ${matchingDiagnostics.rowsWithOutOfRangeCount + matchingDiagnostics.rowsWithNonNumericCount}.`;
+      summary = `${summary} Matching: pairs ${matchingDiagnostics.pairsParsed}, duplicates dropped ${matchingDiagnostics.duplicatePairsDropped}, legacy rows ${matchingDiagnostics.legacyRows}, shape ${matchingDiagnostics.shape}.`;
     }
     return summary;
   }, [
@@ -250,6 +365,13 @@ export function Home() {
   const handleSettingsChange = useCallback((next: AppSettings) => {
     setSettings(next);
     saveSettings(next);
+  }, []);
+
+  const handleMatchingSetSizeChange = useCallback((value: number) => {
+    const clamped = clampSetSize(value);
+    urlSetSizeRef.current = null;
+    setMatchingSetSize(clamped);
+    saveMatchingSetSize(clamped);
   }, []);
 
   const handleResult = useCallback(
@@ -342,18 +464,6 @@ export function Home() {
     settings.exerciseType,
   ]);
 
-  useEffect(() => {
-    if (settings.exerciseType !== "matching") {
-      return;
-    }
-    if (matchingMaxPairs === 0) {
-      return;
-    }
-    if (settings.matchingPairLimit !== 0 && settings.matchingPairLimit > matchingMaxPairs) {
-      handleSettingsChange({ ...settings, matchingPairLimit: 0 });
-    }
-  }, [settings, matchingMaxPairs, handleSettingsChange]);
-
   let content: React.ReactNode = null;
 
   if (state === "loading") {
@@ -395,7 +505,6 @@ export function Home() {
             onResult={(result) => handleResult(currentItem, result)}
             onNext={handleNext}
             existingResult={existingResult}
-            pairLimit={settings.matchingPairLimit}
           />
         );
         break;
@@ -438,7 +547,9 @@ export function Home() {
         onSettingsChange={handleSettingsChange}
         stats={stats}
         onResetProgress={handleResetProgress}
-        matchingMaxPairs={matchingMaxPairs}
+        matchingSetSize={matchingSetSize}
+        onMatchingSetSizeChange={handleMatchingSetSizeChange}
+        matchingSeed={urlSeedRef.current}
       />
       <main className="app-main" aria-live="polite">
         {state === "ready" && (bannerIssues.length > 0 || rowCount === 0) && (
@@ -484,7 +595,6 @@ export function Home() {
         exerciseType={settings.exerciseType}
         rowCount={rowCount}
         matchingDiagnostics={matchingDiagnostics}
-        matchingShape={matchingShape}
       />
       <Footer />
     </div>

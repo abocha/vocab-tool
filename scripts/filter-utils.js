@@ -637,6 +637,8 @@ export function recordDrop(summary, key, sample) {
 export function buildSummaryFragment(summary) {
   const fragment = {};
   for (const [key, value] of Object.entries(summary)) {
+    fragment[key] = value.count;
+    fragment[`${key}Samples`] = value.samples;
     fragment[`dropped${capitalize(key)}`] = value.count;
     fragment[`dropped${capitalize(key)}Samples`] = value.samples;
   }

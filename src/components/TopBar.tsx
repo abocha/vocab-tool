@@ -10,7 +10,9 @@ interface TopBarProps {
     total: number;
   };
   onResetProgress: () => void;
-  matchingMaxPairs: number;
+  matchingSetSize: number;
+  onMatchingSetSizeChange: (value: number) => void;
+  matchingSeed?: string | null;
 }
 
 const typeLabels: Record<AppSettings["exerciseType"], string> = {
@@ -32,7 +34,9 @@ export function TopBar({
   onSettingsChange,
   stats,
   onResetProgress,
-  matchingMaxPairs,
+  matchingSetSize,
+  onMatchingSetSizeChange,
+  matchingSeed,
 }: TopBarProps) {
   const maxOptions = useMemo(
     () =>
@@ -42,17 +46,6 @@ export function TopBar({
       })),
     [],
   );
-
-  const matchingPairOptions = useMemo(() => {
-    const options: Array<{ value: number; label: string }> = [
-      { value: 0, label: "All available" },
-    ];
-    const limit = matchingMaxPairs > 0 ? Math.min(5, matchingMaxPairs) : 5;
-    for (let value = 1; value <= limit; value += 1) {
-      options.push({ value, label: `${value}` });
-    }
-    return options;
-  }, [matchingMaxPairs]);
 
   const handleSettingChange = <Key extends keyof AppSettings>(key: Key, value: AppSettings[Key]) => {
     onSettingsChange({
@@ -127,20 +120,40 @@ export function TopBar({
         {settings.exerciseType === "matching" && (
           <label className="top-bar__field">
             <span className="top-bar__label">Pairs per Set</span>
-            <select
-              value={settings.matchingPairLimit.toString()}
+            <input
+              type="number"
+              min={2}
+              max={12}
+              step={1}
+              value={matchingSetSize}
               onChange={(event) => {
                 const parsed = Number.parseInt(event.target.value, 10);
-                handleSettingChange("matchingPairLimit", Number.isNaN(parsed) ? 0 : parsed);
+                onMatchingSetSizeChange(Number.isNaN(parsed) ? matchingSetSize : parsed);
               }}
-            >
-              {matchingPairOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            />
           </label>
+        )}
+        {settings.exerciseType === "matching" && matchingSeed && (
+          <div className="top-bar__field">
+            <span className="top-bar__label">Deterministic shuffle</span>
+            <div className="top-bar__badge">
+              <code>{matchingSeed}</code>
+              <button
+                type="button"
+                className="top-bar__copy"
+                onClick={() => {
+                  if (typeof navigator !== "undefined" && navigator.clipboard) {
+                    navigator.clipboard.writeText(matchingSeed).catch(() => {
+                      /* ignore clipboard failures */
+                    });
+                  }
+                }}
+                aria-label="Copy matching seed"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
         )}
       </div>
       <div className="top-bar__group top-bar__group--right">

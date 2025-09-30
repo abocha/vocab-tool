@@ -58,7 +58,6 @@ interface PackInspectorProps {
   exerciseType: ExerciseType;
   rowCount: number;
   matchingDiagnostics?: MatchingDiagnostics | null;
-  matchingShape?: "set" | "pair" | "mixed" | null;
 }
 
 function formatItemSummary(item: ExerciseItem): string {
@@ -114,7 +113,6 @@ export function PackInspector({
   exerciseType,
   rowCount,
   matchingDiagnostics,
-  matchingShape,
 }: PackInspectorProps) {
 
   const hiddenItems = useMemo(
@@ -185,14 +183,7 @@ export function PackInspector({
   };
 
   const handleExport = () => {
-    const exportData = buildCsvExport(visibleItems, exerciseType, level, {
-      matchingShape:
-        exerciseType === "matching"
-          ? matchingShape === "pair"
-            ? "pair"
-            : "set"
-          : undefined,
-    });
+    const exportData = buildCsvExport(visibleItems, exerciseType, level);
     if (!exportData) {
       return;
     }
@@ -204,7 +195,7 @@ export function PackInspector({
   const visibleCount = visibleItems.length;
   const filteredOutCount = Math.max(0, allItems.length - filteredCount);
   const matchingSummary = matchingDiagnostics
-    ? `Rows ${matchingDiagnostics.rowsParsed} • Sets ${matchingDiagnostics.setsBuilt} • Dropped <2 pairs ${matchingDiagnostics.setsDroppedTooSmall} • Mismatched ${matchingDiagnostics.rowsWithMismatchedLengths} • Count metadata ${matchingDiagnostics.rowsWithOutOfRangeCount + matchingDiagnostics.rowsWithNonNumericCount}`
+    ? `Rows ${matchingDiagnostics.rowsParsed} • Pairs ${matchingDiagnostics.pairsParsed} • Duplicates dropped ${matchingDiagnostics.duplicatePairsDropped} • Legacy rows ${matchingDiagnostics.legacyRows} • Shape ${matchingDiagnostics.shape}`
     : null;
   const invalidRange =
     filters.minLength !== null &&

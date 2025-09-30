@@ -12,13 +12,13 @@ const STORAGE_PREFIX = "esl-vocab-mvp";
 const SETTINGS_KEY = `${STORAGE_PREFIX}/settings`;
 const PROGRESS_KEY = `${STORAGE_PREFIX}/progress`;
 const INSPECTOR_KEY = `${STORAGE_PREFIX}/inspector`;
+const MATCHING_SET_KEY = "matching.setSize";
 
 const DEFAULT_SETTINGS: AppSettings = {
   level: "A2",
   exerciseType: "gapfill",
   shuffle: false,
   maxItems: 20,
-  matchingPairLimit: 0,
 };
 
 const DEFAULT_INSPECTOR_FILTERS: InspectorFilters = {
@@ -61,6 +61,39 @@ export function saveSettings(settings: AppSettings): void {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch (error) {
     console.warn("Failed to persist settings", error);
+  }
+}
+
+export function loadMatchingSetSize(): number | null {
+  if (!isBrowser()) {
+    return null;
+  }
+
+  try {
+    const stored = window.localStorage.getItem(MATCHING_SET_KEY);
+    if (!stored) {
+      return null;
+    }
+    const parsed = Number.parseInt(stored, 10);
+    if (Number.isNaN(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    console.warn("Failed to load matching set size", error);
+    return null;
+  }
+}
+
+export function saveMatchingSetSize(value: number): void {
+  if (!isBrowser()) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(MATCHING_SET_KEY, String(value));
+  } catch (error) {
+    console.warn("Failed to persist matching set size", error);
   }
 }
 

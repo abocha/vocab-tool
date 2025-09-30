@@ -14,10 +14,12 @@
     "cards:filter": "node ./scripts/corpus-to-cards.js --sfwLevel default --dropProperNouns on",
     "cards:filter:strict": "node ./scripts/corpus-to-cards.js --sfwLevel strict --dropProperNouns on --level A2",
     "packs:from-cards": "node ./scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
+    "packs:from-cards:matching": "node ./scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
     "packs:from-cards:safe": "node ./scripts/cards-to-packs.js --sfwLevel default --dropProperNouns on --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
     "packs:from-cards:strict": "node ./scripts/cards-to-packs.js --sfwLevel strict --dropProperNouns on --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
     "packs:validate": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto",
-    "packs:validate:strict": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto --sfwLevel strict --strict"
+    "packs:validate:strict": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto --sfwLevel strict --strict",
+    "packs:convert:matching": "node ./scripts/convert-matching-set-to-pairs.js --in public/packs/A2/matching.csv --out public/packs/A2/matching.pairs.csv"
   },
   "dependencies": {
     "papaparse": "^5.5.3",

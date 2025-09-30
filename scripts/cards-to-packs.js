@@ -20,8 +20,6 @@ const SOURCE_FALLBACK = "simplewiki";
 const LICENSE_FALLBACK = "CC BY-SA";
 const GAPFILL_MIN_LENGTH = 40;
 const GAPFILL_MAX_LENGTH = 120;
-const MATCHING_MIN_PAIRS = 2;
-const MATCHING_MAX_PAIRS = 12;
 const DISTRACTOR_TOLERANCE = 0.3;
 
 function readBooleanOption(options, key, defaultValue) {
@@ -361,21 +359,14 @@ function buildGapfillRows({ cards, level, limit, filterConfig }) {
   return { rows, stats, dropSummary };
 }
 
-function formatMatchingPair({ collocate, lemma, slot }) {
-  const left = collocate;
-  const right = lemma;
-  return { left, right, slot };
-}
-
 function buildMatchingRows({ cards, level, limit, filterConfig }) {
   const rows = [];
-  const seenRows = new Set();
   const stats = {
-    emitted: 0,
+    matchingMode: "pair",
+    pairsEmitted: 0,
+    pairsFilteredByGuards: 0,
     skippedNoPairs: 0,
     droppedDuplicate: 0,
-    truncated: 0,
-    filteredByGuards: 0,
   };
   const dropSummary = {};
 
@@ -399,7 +390,6 @@ function buildMatchingRows({ cards, level, limit, filterConfig }) {
       }
     }
     if (bucket.length > 0) {
-      bucket.sort((a, b) => a.value.localeCompare(b.value));
       lemmaBuckets.set(lemma, bucket);
     } else {
       cardsWithoutPairs += 1;
@@ -411,108 +401,91 @@ function buildMatchingRows({ cards, level, limit, filterConfig }) {
     return { rows, stats, dropSummary };
   }
 
-  const lemmaIndices = new Map(lemmaList.map((lemma) => [lemma, 0]));
-  const targetSetSize = Math.min(MATCHING_MAX_PAIRS, 6);
-  let startOffset = 0;
+  const shuffledLemmas = deterministicShuffle(lemmaList, `matching|pair|${level}`);
+  const seenPairs = new Set();
+  let limitReached = false;
 
-  while (true) {
-    const leftValues = [];
-    const rightValues = [];
-    const usedLemmas = new Set();
-    let progress = false;
-
-    for (let step = 0; step < lemmaList.length && leftValues.length < targetSetSize; step += 1) {
-      const lemma = lemmaList[(startOffset + step) % lemmaList.length];
-      const bucket = lemmaBuckets.get(lemma);
-      if (!bucket || bucket.length === 0) continue;
-      let idx = lemmaIndices.get(lemma) ?? 0;
-      while (idx < bucket.length) {
-        const candidate = bucket[idx];
-        idx += 1;
-        lemmaIndices.set(lemma, idx);
-        const tokens = [
-          { surface: "the", normalized: "the", index: 0 },
-          { surface: candidate.value, normalized: normalizeToken(candidate.value), index: 1 },
-          { surface: lemma, normalized: normalizeToken(lemma), index: 2 },
-        ];
-        const sentence = `the ${candidate.value} ${lemma}`;
-        const surfaceReasonLeft = evaluateSurface({
-          surface: candidate.value,
-          tokens,
-          index: 1,
-          sentence,
-          filterConfig,
-          dropSummary,
-        });
-        if (surfaceReasonLeft) {
-          stats.filteredByGuards += 1;
-          continue;
-        }
-        const surfaceReasonRight = evaluateSurface({
-          surface: lemma,
-          tokens,
-          index: 2,
-          sentence,
-          filterConfig,
-          dropSummary,
-        });
-        if (surfaceReasonRight) {
-          stats.filteredByGuards += 1;
-          continue;
-        }
-        const unsafeReason = checkUnsafeText(sentence, filterConfig, dropSummary);
-        if (unsafeReason) {
-          stats.filteredByGuards += 1;
-          continue;
-        }
-        leftValues.push(candidate.value);
-        rightValues.push(lemma);
-        usedLemmas.add(lemma);
-        progress = true;
-        break;
+  for (const lemma of shuffledLemmas) {
+    if (limitReached) break;
+    const bucket = lemmaBuckets.get(lemma);
+    if (!bucket || bucket.length === 0) continue;
+    const shuffledCandidates = deterministicShuffle(
+      bucket,
+      `matching|pair|${level}|${lemma}`,
+    );
+    for (const candidate of shuffledCandidates) {
+      const collocate = candidate.value;
+      if (!collocate) {
+        continue;
       }
-      if (leftValues.length >= targetSetSize) break;
-    }
 
-    if (!progress) {
-      break;
-    }
+      const tokens = [
+        { surface: "the", normalized: "the", index: 0 },
+        { surface: collocate, normalized: normalizeToken(collocate), index: 1 },
+        { surface: lemma, normalized: normalizeToken(lemma), index: 2 },
+      ];
+      const sentence = `the ${collocate} ${lemma}`;
 
-    if (leftValues.length < MATCHING_MIN_PAIRS) {
-      break;
-    }
+      const surfaceLeft = evaluateSurface({
+        surface: collocate,
+        tokens,
+        index: 1,
+        sentence,
+        filterConfig,
+        dropSummary,
+      });
+      if (surfaceLeft) {
+        stats.pairsFilteredByGuards += 1;
+        continue;
+      }
 
-    const leftJoined = leftValues.join("|");
-    const rightJoined = rightValues.join("|");
-    const rowKey = `${normalizePrompt(leftJoined)}||${normalizePrompt(rightJoined)}`;
-    if (seenRows.has(rowKey)) {
-      stats.droppedDuplicate += 1;
-    } else {
-      seenRows.add(rowKey);
+      const surfaceRight = evaluateSurface({
+        surface: lemma,
+        tokens,
+        index: 2,
+        sentence,
+        filterConfig,
+        dropSummary,
+      });
+      if (surfaceRight) {
+        stats.pairsFilteredByGuards += 1;
+        continue;
+      }
+
+      const unsafeReason = checkUnsafeText(sentence, filterConfig, dropSummary);
+      if (unsafeReason) {
+        stats.pairsFilteredByGuards += 1;
+        continue;
+      }
+
+      const pairKey = normalizePair(collocate, lemma);
+      if (seenPairs.has(pairKey)) {
+        stats.droppedDuplicate += 1;
+        continue;
+      }
+      seenPairs.add(pairKey);
+
       rows.push([
         level,
         "matching",
-        leftJoined,
-        rightJoined,
-        SOURCE_FALLBACK,
-        LICENSE_FALLBACK,
+        collocate,
+        lemma,
+        candidate.source ?? SOURCE_FALLBACK,
+        candidate.license ?? LICENSE_FALLBACK,
         "",
       ]);
-      stats.emitted += 1;
-    }
+      stats.pairsEmitted += 1;
 
-    if (limit && rows.length >= limit) {
-      break;
+      if (limit && rows.length >= limit) {
+        limitReached = true;
+        break;
+      }
     }
-
-    if (usedLemmas.size === 0) {
-      break;
-    }
-
-    startOffset = (startOffset + usedLemmas.size) % lemmaList.length;
   }
 
   stats.skippedNoPairs = cardsWithoutPairs;
+  stats.emitted = stats.pairsEmitted;
+  stats.filteredByGuards = stats.pairsFilteredByGuards;
 
   return { rows, stats, dropSummary };
 }
@@ -847,6 +820,9 @@ async function main() {
 
   const summaryExtras = buildSummaryFragment(combinedDropSummary);
   summaryExtras.sfwLevel = filterConfig.sfwLevel;
+  summaryExtras.matchingMode = "pair";
+  summaryExtras.pairsEmitted = matching.stats.pairsEmitted;
+  summaryExtras.pairsFilteredByGuards = matching.stats.pairsFilteredByGuards;
 
   logSummary({
     gapfill: gapfill.stats,
