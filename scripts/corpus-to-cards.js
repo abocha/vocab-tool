@@ -9,6 +9,7 @@ const ALLOWED_POS = new Set(["NOUN", "VERB", "ADJ", "ADV"]);
 const DEFAULT_LEVEL = "A2";
 const SOURCE = "simplewiki";
 const LICENSE = "CC BY-SA";
+const SURFACE_FORM_PATTERN = /^[a-z][a-z'\u2019-]{0,31}$/i;
 
 function toNumber(value) {
   if (value == null || value === "") return null;
@@ -28,6 +29,32 @@ function normalizePos(raw) {
   if (upper === "NOUN" || upper === "NN" || upper === "N") return "NOUN";
   if (upper === "ADVERB" || upper === "ADV" || upper === "RB") return "ADV";
   return upper;
+}
+
+function normalizeSurfaceForm(value) {
+  if (!value) return "";
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return "";
+  if (!SURFACE_FORM_PATTERN.test(normalized)) {
+    return "";
+  }
+  return normalized;
+}
+
+function resolveSurfacePos(surface, surfacePosCounts) {
+  if (!surface || !surfacePosCounts) return "";
+  const posCounts = surfacePosCounts.get(surface);
+  if (!posCounts) return "";
+  let bestPos = "";
+  let bestScore = -Infinity;
+  for (const [pos, count] of posCounts.entries()) {
+    if (!ALLOWED_POS.has(pos)) continue;
+    if (count > bestScore) {
+      bestScore = count;
+      bestPos = pos;
+    }
+  }
+  return bestPos;
 }
 
 function parseArgs(argv) {
@@ -148,6 +175,7 @@ async function collectFreqStats({ filePath, limit }) {
         posCounts: new Map(),
         posEvidence: new Map(),
         examples: new Map(),
+        forms: new Set([lemma]),
         collocationBuckets: {
           adjForNoun: new Map(),
           nounForVerb: new Map(),
@@ -171,28 +199,85 @@ async function collectFreqStats({ filePath, limit }) {
   return { totalTokens, lemmas };
 }
 
-async function collectTokenPos({ filePath, lemmas }) {
-  if (!filePath) return;
+async function collectTokenData({ filePath, lemmas }) {
+  if (!filePath) {
+    return { formIndex: null, lemmasWithForms: 0, formsIndexed: 0, surfacePosCounts: new Map() };
+  }
   try {
     await fs.access(filePath);
   } catch (error) {
-    return;
+    return { formIndex: null, lemmasWithForms: 0, formsIndexed: 0, surfacePosCounts: new Map() };
   }
 
   const tracked = new Set(lemmas.keys());
-  if (tracked.size === 0) return;
+  if (tracked.size === 0) {
+    return { formIndex: null, lemmasWithForms: 0, formsIndexed: 0, surfacePosCounts: new Map() };
+  }
+
+  const surfacePosCounts = new Map();
+
+  function bumpSurfacePos(surface, pos, weight) {
+    if (!surface || !pos) return;
+    let posCounts = surfacePosCounts.get(surface);
+    if (!posCounts) {
+      posCounts = new Map();
+      surfacePosCounts.set(surface, posCounts);
+    }
+    posCounts.set(pos, (posCounts.get(pos) ?? 0) + weight);
+  }
 
   for await (const row of readCsvRecords(filePath)) {
     const rawLemma = pick(row, ["lemma", "token", "word", "lemma_lower"]);
     const lemma = normalizeLemma(rawLemma);
     if (!tracked.has(lemma)) continue;
-    const pos = normalizePos(pick(row, ["upos", "pos", "xpos", "tag"]));
-    if (!ALLOWED_POS.has(pos)) continue;
     const entry = lemmas.get(lemma);
+    if (!entry) continue;
+
+    const pos = normalizePos(pick(row, ["upos", "pos", "xpos", "tag"]));
+    const surfaceRaw = pick(row, ["token", "word", "surface", "text"]);
+    const surface = normalizeSurfaceForm(surfaceRaw);
     const weightValue = pick(row, ["count", "freq", "frequency", "token_count"]);
     const weight = toNumber(weightValue) ?? 1;
-    entry.posCounts.set(pos, (entry.posCounts.get(pos) ?? 0) + weight);
+
+    if (ALLOWED_POS.has(pos)) {
+      entry.posCounts.set(pos, (entry.posCounts.get(pos) ?? 0) + weight);
+      recordPosEvidence(entry, pos, weight);
+      if (surface) {
+        entry.forms.add(surface);
+        bumpSurfacePos(surface, pos, weight);
+      }
+      continue;
+    }
+
+    if (surface) {
+      entry.forms.add(surface);
+    }
   }
+
+  const formIndex = new Map();
+  let lemmasWithForms = 0;
+
+  for (const entry of lemmas.values()) {
+    if (!entry.forms) continue;
+    if (entry.forms.size > 1) {
+      lemmasWithForms += 1;
+    }
+    for (const form of entry.forms) {
+      if (!form) continue;
+      let bucket = formIndex.get(form);
+      if (!bucket) {
+        bucket = [];
+        formIndex.set(form, bucket);
+      }
+      bucket.push(entry);
+    }
+  }
+
+  for (const bucket of formIndex.values()) {
+    bucket.sort((a, b) => a.lemma.localeCompare(b.lemma));
+  }
+
+  return { formIndex, lemmasWithForms, formsIndexed: formIndex.size, surfacePosCounts };
 }
 
 function recordPosEvidence(entry, pos, weight) {
@@ -207,7 +292,7 @@ function recordCollocation(bucket, key, weight) {
   bucket.set(key, current);
 }
 
-async function collectBigrams({ filePath, lemmas, minColloc }) {
+async function collectBigrams({ filePath, lemmas, minColloc, formIndex, surfacePosCounts }) {
   try {
     await fs.access(filePath);
   } catch (error) {
@@ -218,41 +303,123 @@ async function collectBigrams({ filePath, lemmas, minColloc }) {
   if (tracked.size === 0) return;
 
   for await (const row of readCsvRecords(filePath)) {
-    const lemma1 = normalizeLemma(pick(row, ["lemma1", "left_lemma", "w1", "token1", "left"]));
-    const lemma2 = normalizeLemma(pick(row, ["lemma2", "right_lemma", "w2", "token2", "right"]));
-    if (!lemma1 && !lemma2) continue;
+    let lemma1 = normalizeLemma(pick(row, ["lemma1", "left_lemma", "w1", "token1", "left"]));
+    let lemma2 = normalizeLemma(pick(row, ["lemma2", "right_lemma", "w2", "token2", "right"]));
 
-    const pos1 = normalizePos(pick(row, ["pos1", "upos1", "xpos1", "left_pos"]));
-    const pos2 = normalizePos(pick(row, ["pos2", "upos2", "xpos2", "right_pos"]));
-    const count = toNumber(pick(row, ["count", "freq", "frequency", "total", "bigram_count"])) ?? 0;
-    if (count < minColloc) {
-      if (tracked.has(lemma1)) recordPosEvidence(lemmas.get(lemma1), pos1, count);
-      if (tracked.has(lemma2)) recordPosEvidence(lemmas.get(lemma2), pos2, count);
+    let token1 = normalizeSurfaceForm(pick(row, ["token1", "w1", "left_token", "left"]));
+    let token2 = normalizeSurfaceForm(pick(row, ["token2", "w2", "right_token", "right"]));
+    const ngramRaw = pick(row, ["ngram", "text", "pair"]);
+    if ((!token1 || !token2) && ngramRaw) {
+      const parts = ngramRaw
+        .split(/\s+/)
+        .map((part) => normalizeSurfaceForm(part))
+        .filter((part) => part);
+      if (parts.length >= 2) {
+        if (!token1) token1 = parts[0];
+        if (!token2) token2 = parts[1];
+      }
+    }
+
+    const leftEntries = [];
+    const rightEntries = [];
+    const leftSeen = new Set();
+    const rightSeen = new Set();
+
+    if (lemma1 && lemmas.has(lemma1)) {
+      const entry = lemmas.get(lemma1);
+      leftEntries.push(entry);
+      leftSeen.add(entry);
+    }
+    if (!lemma1 && token1 && formIndex?.has(token1)) {
+      for (const entry of formIndex.get(token1)) {
+        if (!leftSeen.has(entry)) {
+          leftEntries.push(entry);
+          leftSeen.add(entry);
+        }
+      }
+    }
+
+    if (lemma2 && lemmas.has(lemma2)) {
+      const entry = lemmas.get(lemma2);
+      rightEntries.push(entry);
+      rightSeen.add(entry);
+    }
+    if (!lemma2 && token2 && formIndex?.has(token2)) {
+      for (const entry of formIndex.get(token2)) {
+        if (!rightSeen.has(entry)) {
+          rightEntries.push(entry);
+          rightSeen.add(entry);
+        }
+      }
+    }
+
+    if (leftEntries.length === 0 && rightEntries.length === 0) {
       continue;
     }
 
-    if (tracked.has(lemma2)) {
-      const entry = lemmas.get(lemma2);
+    let pos1 = normalizePos(pick(row, ["pos1", "upos1", "xpos1", "left_pos"]));
+    let pos2 = normalizePos(pick(row, ["pos2", "upos2", "xpos2", "right_pos"]));
+    if (!ALLOWED_POS.has(pos1)) pos1 = resolveSurfacePos(token1, surfacePosCounts);
+    if (!ALLOWED_POS.has(pos2)) pos2 = resolveSurfacePos(token2, surfacePosCounts);
+
+    const count = toNumber(pick(row, ["count", "freq", "frequency", "total", "bigram_count"])) ?? 0;
+
+    const leftCollocStrings = leftEntries.length > 0
+      ? Array.from(new Set(leftEntries.map((entry) => entry.lemma)))
+      : token1
+        ? [token1]
+        : [];
+    const rightCollocStrings = rightEntries.length > 0
+      ? Array.from(new Set(rightEntries.map((entry) => entry.lemma)))
+      : token2
+        ? [token2]
+        : [];
+
+    if (count < minColloc) {
+      for (const entry of leftEntries) {
+        recordPosEvidence(entry, pos1, count);
+      }
+      for (const entry of rightEntries) {
+        recordPosEvidence(entry, pos2, count);
+      }
+      continue;
+    }
+
+    for (const entry of rightEntries) {
       recordPosEvidence(entry, pos2, count);
       if (pos1 === "ADJ" && pos2 === "NOUN") {
-        recordCollocation(entry.collocationBuckets.adjForNoun, lemma1, count);
+        for (const value of leftCollocStrings) {
+          recordCollocation(entry.collocationBuckets.adjForNoun, value, count);
+        }
       }
       if (pos1 === "VERB" && pos2 === "ADV") {
-        recordCollocation(entry.collocationBuckets.verbForAdv, lemma1, count);
+        for (const value of leftCollocStrings) {
+          recordCollocation(entry.collocationBuckets.verbForAdv, value, count);
+        }
+      }
+      if (pos1 === "ADV" && pos2 === "ADJ") {
+        for (const value of leftCollocStrings) {
+          recordCollocation(entry.collocationBuckets.adjForAdv, value, count);
+        }
       }
     }
 
-    if (tracked.has(lemma1)) {
-      const entry = lemmas.get(lemma1);
+    for (const entry of leftEntries) {
       recordPosEvidence(entry, pos1, count);
       if (pos1 === "VERB" && pos2 === "NOUN") {
-        recordCollocation(entry.collocationBuckets.nounForVerb, lemma2, count);
+        for (const value of rightCollocStrings) {
+          recordCollocation(entry.collocationBuckets.nounForVerb, value, count);
+        }
       }
       if (pos1 === "ADJ" && pos2 === "NOUN") {
-        recordCollocation(entry.collocationBuckets.nounForAdj, lemma2, count);
+        for (const value of rightCollocStrings) {
+          recordCollocation(entry.collocationBuckets.nounForAdj, value, count);
+        }
       }
       if (pos1 === "ADV" && pos2 === "ADJ") {
-        recordCollocation(entry.collocationBuckets.adjForAdv, lemma2, count);
+        for (const value of rightCollocStrings) {
+          recordCollocation(entry.collocationBuckets.adjForAdv, value, count);
+        }
       }
     }
   }
@@ -268,40 +435,66 @@ function isSentenceEligible(sentence) {
 }
 
 function collectTokensFromSentence(sentence) {
-  const matches = sentence.toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g);
-  return matches ? new Set(matches) : new Set();
+  const lowered = sentence.toLowerCase();
+  const rawTokens = lowered.split(/[^a-z'\u2019-]+/);
+  const tokens = new Set();
+  for (const rawToken of rawTokens) {
+    const normalized = normalizeSurfaceForm(rawToken);
+    if (normalized) {
+      tokens.add(normalized);
+    }
+  }
+  return tokens;
 }
 
-async function collectExamples({ filePath, lemmas, maxExamples }) {
+async function collectExamples({ filePath, lemmas, maxExamples, formIndex }) {
   try {
     await fs.access(filePath);
   } catch (error) {
-    return;
+    return { exampleMatchesTried: 0 };
   }
 
   const tracked = new Set(lemmas.keys());
-  if (tracked.size === 0) return;
+  if (tracked.size === 0) return { exampleMatchesTried: 0 };
 
   const stream = createReadStream(filePath);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  const usingSurfaceForms = formIndex instanceof Map && formIndex.size > 0;
+  let exampleMatchesTried = 0;
 
   for await (const rawLine of rl) {
     const sentence = normalizeSentence(rawLine);
     if (!isSentenceEligible(sentence)) continue;
     const tokens = collectTokensFromSentence(sentence);
     if (tokens.size === 0) continue;
+    const sentenceKey = sentence.toLowerCase();
+    if (usingSurfaceForms) {
+      for (const token of tokens) {
+        const candidates = formIndex.get(token);
+        if (!candidates) continue;
+        for (const entry of candidates) {
+          if (entry.examples.size >= maxExamples) continue;
+          if (entry.examples.has(sentenceKey)) continue;
+          entry.examples.set(sentenceKey, sentence);
+          exampleMatchesTried += 1;
+        }
+      }
+      continue;
+    }
+
     for (const token of tokens) {
       if (!tracked.has(token)) continue;
       const entry = lemmas.get(token);
+      if (!entry) continue;
       if (entry.examples.size >= maxExamples) continue;
-      const key = sentence.toLowerCase();
-      if (entry.examples.has(key)) continue;
-      entry.examples.set(key, sentence);
-      if (entry.examples.size >= maxExamples && entry.examples.size === maxExamples) {
-        // keep as is; no early exit to allow other lemmas in same sentence.
-      }
+      if (entry.examples.has(sentenceKey)) continue;
+      entry.examples.set(sentenceKey, sentence);
+      exampleMatchesTried += 1;
     }
   }
+
+  return { exampleMatchesTried };
 }
 
 function pickPos(entry) {
@@ -429,6 +622,9 @@ function logSummary({
   cardsWithCollocations,
   posCounts,
   missingFreq,
+  lemmasWithForms,
+  formsIndexed,
+  exampleMatchesTried,
 }) {
   const summary = {
     lemmasSeen,
@@ -438,7 +634,10 @@ function logSummary({
     withCollocations: cardsWithCollocations,
     avgCollocsPerCard: cards.length ? Number((totalCollocations / cards.length).toFixed(2)) : 0,
     posBreakdown: posCounts,
-    missingFreq: missingFreq,
+    missingFreq,
+    lemmasWithForms,
+    formsIndexed,
+    exampleMatchesTried,
   };
   console.log(JSON.stringify(summary, null, 2));
 }
@@ -489,9 +688,12 @@ async function main() {
   const { totalTokens, lemmas } = await collectFreqStats({ filePath: freqPath, limit });
   const lemmasSeen = lemmas.size;
 
-  await collectTokenPos({ filePath: tokensPath, lemmas });
-  await collectBigrams({ filePath: bigramPath, lemmas, minColloc });
-  await collectExamples({ filePath: sentencesPath, lemmas, maxExamples });
+  const { formIndex, lemmasWithForms, formsIndexed, surfacePosCounts } = await collectTokenData({ filePath: tokensPath, lemmas });
+  if (formIndex && formIndex.size > 0 && lemmasWithForms > 0) {
+    console.log("Using surface-form matching via tokens corpus (tokens.csv[.gz]).");
+  }
+  await collectBigrams({ filePath: bigramPath, lemmas, minColloc, formIndex, surfacePosCounts });
+  const { exampleMatchesTried } = await collectExamples({ filePath: sentencesPath, lemmas, maxExamples, formIndex });
 
   const cards = [];
   let totalExamples = 0;
@@ -556,6 +758,9 @@ async function main() {
     cardsWithCollocations,
     posCounts,
     missingFreq,
+    lemmasWithForms,
+    formsIndexed,
+    exampleMatchesTried,
   });
 
   if (showSamples) {

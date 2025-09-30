@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "prepare:packs": "node ./scripts/prepare-packs.js",
     "cards:draft": "node ./scripts/corpus-to-cards.js --level A2",
+    "cards:smoke": "node ./scripts/corpus-to-cards.js --level A2 --tokens ./.codex-local/corpus/simplewiki/data/tokens.csv.gz --out ./cards/draft_cards.jsonl",
     "packs:from-cards": "node ./scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
     "packs:validate": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto"
   },
