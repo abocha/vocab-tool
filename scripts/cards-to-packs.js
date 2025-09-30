@@ -13,6 +13,7 @@ import {
   buildSummaryFragment,
   mergeDropSummaries,
   isFormulaArtifact,
+  normalizeToken,
 } from "./filter-utils.js";
 
 const SOURCE_FALLBACK = "simplewiki";
@@ -378,95 +379,140 @@ function buildMatchingRows({ cards, level, limit, filterConfig }) {
   };
   const dropSummary = {};
 
+  const lemmaBuckets = new Map();
+  let cardsWithoutPairs = 0;
+
   for (const card of cards) {
     if (!card || typeof card.lemma !== "string" || typeof card.collocations !== "object" || card.collocations === null) {
-      stats.skippedNoPairs += 1;
       continue;
     }
-    const pairs = [];
-    const pairKeys = new Set();
-    for (const [slot, collocs] of Object.entries(card.collocations)) {
+    const lemma = card.lemma;
+    const bucket = lemmaBuckets.get(lemma) ?? [];
+    const seenValues = new Set(bucket.map((candidate) => candidate.value));
+    for (const collocs of Object.values(card.collocations)) {
       if (!Array.isArray(collocs)) continue;
-      collocs.forEach((collocate) => {
-        if (!collocate || collocate.trim().length === 0) return;
-        const pair = formatMatchingPair({ collocate: collocate.trim(), lemma: card.lemma, slot });
-        const key = normalizePair(pair.left, pair.right);
-        if (pairKeys.has(key)) return;
+      for (const raw of collocs) {
+        const value = raw?.trim();
+        if (!value || seenValues.has(value)) continue;
+        seenValues.add(value);
+        bucket.push({ value, source: card.source ?? SOURCE_FALLBACK, license: card.license ?? LICENSE_FALLBACK });
+      }
+    }
+    if (bucket.length > 0) {
+      bucket.sort((a, b) => a.value.localeCompare(b.value));
+      lemmaBuckets.set(lemma, bucket);
+    } else {
+      cardsWithoutPairs += 1;
+    }
+  }
 
-        const sentence = `the ${pair.left} ${pair.right}`;
+  const lemmaList = Array.from(lemmaBuckets.keys()).sort((a, b) => a.localeCompare(b));
+  if (lemmaList.length === 0) {
+    return { rows, stats, dropSummary };
+  }
+
+  const lemmaIndices = new Map(lemmaList.map((lemma) => [lemma, 0]));
+  const targetSetSize = Math.min(MATCHING_MAX_PAIRS, 6);
+  let startOffset = 0;
+
+  while (true) {
+    const leftValues = [];
+    const rightValues = [];
+    const usedLemmas = new Set();
+    let progress = false;
+
+    for (let step = 0; step < lemmaList.length && leftValues.length < targetSetSize; step += 1) {
+      const lemma = lemmaList[(startOffset + step) % lemmaList.length];
+      const bucket = lemmaBuckets.get(lemma);
+      if (!bucket || bucket.length === 0) continue;
+      let idx = lemmaIndices.get(lemma) ?? 0;
+      while (idx < bucket.length) {
+        const candidate = bucket[idx];
+        idx += 1;
+        lemmaIndices.set(lemma, idx);
         const tokens = [
           { surface: "the", normalized: "the", index: 0 },
-          { surface: pair.left, normalized: pair.left.toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
-          { surface: pair.right, normalized: pair.right.toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
+          { surface: candidate.value, normalized: normalizeToken(candidate.value), index: 1 },
+          { surface: lemma, normalized: normalizeToken(lemma), index: 2 },
         ];
-        const leftReason = evaluateSurface({
-          surface: pair.left,
+        const sentence = `the ${candidate.value} ${lemma}`;
+        const surfaceReasonLeft = evaluateSurface({
+          surface: candidate.value,
           tokens,
           index: 1,
           sentence,
           filterConfig,
           dropSummary,
         });
-        if (leftReason) {
+        if (surfaceReasonLeft) {
           stats.filteredByGuards += 1;
-          return;
+          continue;
         }
-
-        const rightReason = evaluateSurface({
-          surface: pair.right,
+        const surfaceReasonRight = evaluateSurface({
+          surface: lemma,
           tokens,
           index: 2,
           sentence,
           filterConfig,
           dropSummary,
         });
-        if (rightReason) {
+        if (surfaceReasonRight) {
           stats.filteredByGuards += 1;
-          return;
+          continue;
         }
-
         const unsafeReason = checkUnsafeText(sentence, filterConfig, dropSummary);
         if (unsafeReason) {
           stats.filteredByGuards += 1;
-          return;
+          continue;
         }
-
-        pairKeys.add(key);
-        pairs.push(pair);
-      });
+        leftValues.push(candidate.value);
+        rightValues.push(lemma);
+        usedLemmas.add(lemma);
+        progress = true;
+        break;
+      }
+      if (leftValues.length >= targetSetSize) break;
     }
 
-    if (pairs.length < MATCHING_MIN_PAIRS) {
-      stats.skippedNoPairs += 1;
-      continue;
+    if (!progress) {
+      break;
     }
 
-    if (pairs.length > MATCHING_MAX_PAIRS) {
-      pairs.length = MATCHING_MAX_PAIRS;
-      stats.truncated += 1;
+    if (leftValues.length < MATCHING_MIN_PAIRS) {
+      break;
     }
 
-    const leftValues = pairs.map((pair) => pair.left).join("|");
-    const rightValues = pairs.map((pair) => pair.right).join("|");
-    const rowKey = `${normalizePrompt(leftValues)}||${normalizePrompt(rightValues)}`;
+    const leftJoined = leftValues.join("|");
+    const rightJoined = rightValues.join("|");
+    const rowKey = `${normalizePrompt(leftJoined)}||${normalizePrompt(rightJoined)}`;
     if (seenRows.has(rowKey)) {
       stats.droppedDuplicate += 1;
-      continue;
+    } else {
+      seenRows.add(rowKey);
+      rows.push([
+        level,
+        "matching",
+        leftJoined,
+        rightJoined,
+        SOURCE_FALLBACK,
+        LICENSE_FALLBACK,
+        "",
+      ]);
+      stats.emitted += 1;
     }
-    seenRows.add(rowKey);
 
-    rows.push([
-      level,
-      "matching",
-      leftValues,
-      rightValues,
-      card.source ?? SOURCE_FALLBACK,
-      card.license ?? LICENSE_FALLBACK,
-      "",
-    ]);
-    stats.emitted += 1;
-    if (limit && rows.length >= limit) break;
+    if (limit && rows.length >= limit) {
+      break;
+    }
+
+    if (usedLemmas.size === 0) {
+      break;
+    }
+
+    startOffset = (startOffset + usedLemmas.size) % lemmaList.length;
   }
+
+  stats.skippedNoPairs = cardsWithoutPairs;
 
   return { rows, stats, dropSummary };
 }
