@@ -3,6 +3,17 @@ import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import {
+  buildFilterConfig,
+  tokenizeSentence,
+  isProperNounLike,
+  isUnsafe,
+  isAcronym,
+  recordDrop,
+  buildSummaryFragment,
+  mergeDropSummaries,
+  isFormulaArtifact,
+} from "./filter-utils.js";
 
 const GAPFILL_MIN_LENGTH = 40;
 const GAPFILL_MAX_LENGTH = 120;
@@ -12,6 +23,68 @@ const REQUIRED_HEADERS = {
   matching: ["level", "type", "left", "right", "source", "license"],
   mcq: ["type", "prompt", "options", "answer", "source", "license"],
 };
+
+function readBooleanOption(options, key, defaultValue) {
+  if (!options.has(key)) {
+    return defaultValue;
+  }
+  const raw = options.get(key);
+  if (raw === "" || raw == null) {
+    return true;
+  }
+  const lower = String(raw).toLowerCase();
+  if (["false", "off", "0", "no"].includes(lower)) return false;
+  if (["true", "on", "1", "yes"].includes(lower)) return true;
+  return defaultValue;
+}
+
+function readPathOption(options, key) {
+  if (!options.has(key)) return null;
+  const value = options.get(key);
+  if (!value) return null;
+  return value;
+}
+
+function readNumberOption(options, key, defaultValue) {
+  if (!options.has(key)) return defaultValue;
+  const raw = options.get(key);
+  if (raw == null || raw === "") return defaultValue;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : defaultValue;
+}
+
+function checkUnsafeText(text, filterConfig, dropSummary) {
+  if (!filterConfig.sfw) return false;
+  if (!text) return false;
+  if (isUnsafe(text, filterConfig.blocklist, true)) {
+    recordDrop(dropSummary, "unsafe", text.slice(0, 160));
+    return true;
+  }
+  return false;
+}
+
+function evaluateSurface({ surface, tokens, index, sentence, filterConfig, dropSummary }) {
+  if (!surface) return false;
+  if (isAcronym(surface, filterConfig.acronymMinLen, filterConfig.allowlist)) {
+    recordDrop(dropSummary, "acronym", `${surface} :: ${sentence?.slice(0, 120) ?? ""}`);
+    return true;
+  }
+  const proper = isProperNounLike({
+    entry: null,
+    surface,
+    tokens,
+    index,
+    sentenceInitial: index === 0,
+    properSet: filterConfig.properContext,
+    nationalitySet: filterConfig.nationalities,
+    config: filterConfig,
+  });
+  if (proper) {
+    recordDrop(dropSummary, "proper", `${surface} :: ${sentence?.slice(0, 120) ?? ""}`);
+    return true;
+  }
+  return false;
+}
 
 function parseArgs(argv) {
   const packs = [];
@@ -127,7 +200,7 @@ function createGapfillState() {
   };
 }
 
-function evaluateGapfillRow(row, state) {
+function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
   state.total += 1;
   const prompt = safeString(row.prompt ?? row["prompt"]);
   const answer = safeString(row.answer ?? row["answer"]);
@@ -159,6 +232,24 @@ function evaluateGapfillRow(row, state) {
     return;
   }
   state.seen.add(key);
+
+  const reconstructed = prompt.includes("_____")
+    ? prompt.replace("_____", answer)
+    : `${prompt} ${answer}`;
+  const tokens = tokenizeSentence(reconstructed);
+  const answerLower = answer.toLowerCase();
+  let tokenIndex = tokens.findIndex((token) => token.surface.toLowerCase() === answerLower);
+  if (tokenIndex < 0) tokenIndex = 0;
+  evaluateSurface({
+    surface: answer,
+    tokens,
+    index: tokenIndex,
+    sentence: reconstructed,
+    filterConfig,
+    dropSummary: filterSummary,
+  });
+  checkUnsafeText(reconstructed, filterConfig, filterSummary);
+
   state.kept += 1;
 }
 
@@ -180,7 +271,7 @@ function createMatchingState() {
   };
 }
 
-function evaluateMatchingRow(row, state) {
+function evaluateMatchingRow(row, state, filterConfig, filterSummary) {
   state.total += 1;
   const rawLeft = row.left ?? row["left"];
   const rawRight = row.right ?? row["right"];
@@ -205,6 +296,29 @@ function evaluateMatchingRow(row, state) {
       return;
     }
     state.seenPairs.add(pairKey);
+    const sentence = `the ${left[0]} ${right[0]}`;
+    const tokens = [
+      { surface: "the", normalized: "the", index: 0 },
+      { surface: left[0], normalized: left[0].toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
+      { surface: right[0], normalized: right[0].toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
+    ];
+    evaluateSurface({
+      surface: left[0],
+      tokens,
+      index: 1,
+      sentence,
+      filterConfig,
+      dropSummary: filterSummary,
+    });
+    evaluateSurface({
+      surface: right[0],
+      tokens,
+      index: 2,
+      sentence,
+      filterConfig,
+      dropSummary: filterSummary,
+    });
+    checkUnsafeText(sentence, filterConfig, filterSummary);
     state.keptPairs += 1;
     return;
   }
@@ -224,6 +338,29 @@ function evaluateMatchingRow(row, state) {
       continue;
     }
     seenPairs.add(key);
+    const sentence = `the ${leftValue} ${rightValue}`;
+    const tokens = [
+      { surface: "the", normalized: "the", index: 0 },
+      { surface: leftValue, normalized: leftValue.toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
+      { surface: rightValue, normalized: rightValue.toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
+    ];
+    evaluateSurface({
+      surface: leftValue,
+      tokens,
+      index: 1,
+      sentence,
+      filterConfig,
+      dropSummary: filterSummary,
+    });
+    evaluateSurface({
+      surface: rightValue,
+      tokens,
+      index: 2,
+      sentence,
+      filterConfig,
+      dropSummary: filterSummary,
+    });
+    checkUnsafeText(sentence, filterConfig, filterSummary);
     pairs.push({ left: leftValue, right: rightValue });
   }
   if (pairs.length < MATCHING_MIN_PAIRS) {
@@ -276,7 +413,7 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
-function evaluateMcqRow(row, state) {
+function evaluateMcqRow(row, state, filterConfig, filterSummary) {
   state.total += 1;
   const prompt = safeString(row.prompt ?? row["prompt"]);
   const answer = safeString(row.answer ?? row["answer"]);
@@ -324,10 +461,35 @@ function evaluateMcqRow(row, state) {
     }
   }
 
+  const reconstructed = prompt.includes("_____") ? prompt.replace("_____", answer) : prompt;
+  const tokens = tokenizeSentence(reconstructed);
+  const answerLower = answer.toLowerCase();
+  let tokenIndex = tokens.findIndex((token) => token.surface.toLowerCase() === answerLower);
+  if (tokenIndex < 0) tokenIndex = 0;
+  evaluateSurface({
+    surface: answer,
+    tokens,
+    index: tokenIndex,
+    sentence: reconstructed,
+    filterConfig,
+    dropSummary: filterSummary,
+  });
+  checkUnsafeText(reconstructed, filterConfig, filterSummary);
+  checkUnsafeText(options.join(" "), filterConfig, filterSummary);
+  for (const option of options) {
+    if (isAcronym(option, filterConfig.acronymMinLen, filterConfig.allowlist)) {
+      recordDrop(filterSummary, "acronym", option);
+    }
+    if (isFormulaArtifact(option)) {
+      recordDrop(filterSummary, "formula", option);
+    }
+    checkUnsafeText(option, filterConfig, filterSummary);
+  }
+
   state.kept += 1;
 }
 
-async function analyzeFile({ filePath, type }) {
+async function analyzeFile({ filePath, type }, filterConfig) {
   let headers = [];
   let fatal = false;
   let headerChecked = false;
@@ -339,6 +501,7 @@ async function analyzeFile({ filePath, type }) {
   const gapfillState = createGapfillState();
   const matchingState = createMatchingState();
   const mcqState = createMcqState();
+  const filterSummary = {};
 
   for await (let line of rl) {
     lineNumber += 1;
@@ -379,11 +542,11 @@ async function analyzeFile({ filePath, type }) {
     }
 
     if (type === "gapfill") {
-      evaluateGapfillRow(row, gapfillState);
+      evaluateGapfillRow(row, gapfillState, filterConfig, filterSummary);
     } else if (type === "matching") {
-      evaluateMatchingRow(row, matchingState);
+      evaluateMatchingRow(row, matchingState, filterConfig, filterSummary);
     } else if (type === "mcq") {
-      evaluateMcqRow(row, mcqState);
+      evaluateMcqRow(row, mcqState, filterConfig, filterSummary);
     }
   }
 
@@ -404,6 +567,7 @@ async function analyzeFile({ filePath, type }) {
       total: gapfillState.total,
       kept: gapfillState.kept,
       drops: gapfillState.drops,
+      filterSummary,
     };
   }
 
@@ -418,6 +582,7 @@ async function analyzeFile({ filePath, type }) {
       mismatchedPairs: matchingState.mismatchedPairs,
       dedupedPairs: matchingState.dedupedPairs,
       keptAsPairs: matchingState.keptPairs,
+      filterSummary,
     };
   }
 
@@ -429,6 +594,7 @@ async function analyzeFile({ filePath, type }) {
     kept: mcqState.kept,
     drops: mcqState.drops,
     nearDuplicateOptions: mcqState.nearDuplicates,
+    filterSummary,
   };
 }
 
@@ -459,7 +625,7 @@ async function collectFiles({ packs, dir }) {
   return { files };
 }
 
-function formatSummary(results) {
+function formatSummary(results, combinedFilters) {
   const summary = results.map((result) => ({
     file: path.relative(process.cwd(), result.filePath),
     type: result.type,
@@ -476,10 +642,12 @@ function formatSummary(results) {
     },
     skipped: result.skipped ?? null,
     error: result.error ?? null,
+    filters: result.filters ?? buildSummaryFragment(result.filterSummary ?? {}),
   }));
   return {
     task: "packs-validate",
     files: summary,
+    filters: buildSummaryFragment(combinedFilters),
   };
 }
 
@@ -487,6 +655,36 @@ async function main() {
   const { packs, dir, type } = parseArgs(process.argv.slice(2));
   const forcedType = type !== "auto" ? type : null;
   const singlePackMode = packs.length > 0;
+
+  const optionMap = new Map();
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i];
+    if (!token.startsWith("--")) continue;
+    const value = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : "";
+    optionMap.set(token, value);
+  }
+
+  const sfw = readBooleanOption(optionMap, "--sfw", true);
+  const dropProperNouns = readBooleanOption(optionMap, "--dropProperNouns", true);
+  const strict = readBooleanOption(optionMap, "--strict", false);
+  const acronymMinLen = readNumberOption(optionMap, "--acronymMinLen", 3);
+  const blockListPath = readPathOption(optionMap, "--blockList");
+  const allowListPath = readPathOption(optionMap, "--allowList");
+  const properListPath = readPathOption(optionMap, "--properList");
+  const nationalitiesPath = readPathOption(optionMap, "--nationalities");
+
+  const filterConfig = await buildFilterConfig({
+    cwd: process.cwd(),
+    blockListPath,
+    allowListPath,
+    properListPath,
+    nationalitiesPath,
+    acronymMinLen,
+    dropProperNouns,
+    sfw,
+  });
+
   const collected = await collectFiles({ packs, dir });
   if (collected.error) {
     console.error(collected.error);
@@ -500,6 +698,7 @@ async function main() {
   }
 
   const results = [];
+  const combinedFilterSummary = {};
   for (const filePath of fileList) {
     const inferred = inferType(filePath);
     if (forcedType && !singlePackMode && inferred && inferred !== forcedType) {
@@ -518,14 +717,24 @@ async function main() {
       });
       continue;
     }
-    const analysis = await analyzeFile({ filePath, type: packType });
+    const analysis = await analyzeFile({ filePath, type: packType }, filterConfig);
+    if (analysis.filterSummary) {
+      analysis.filters = buildSummaryFragment(analysis.filterSummary);
+      mergeDropSummaries(combinedFilterSummary, analysis.filterSummary);
+    }
     results.push(analysis);
   }
 
-  const summary = formatSummary(results);
+  const summary = formatSummary(results, combinedFilterSummary);
   console.log(JSON.stringify(summary, null, 2));
 
   if (results.some((result) => result.fatal)) {
+    process.exitCode = 1;
+    return;
+  }
+
+  const hasFilterIssues = Object.values(combinedFilterSummary).some((entry) => (entry?.count ?? 0) > 0);
+  if (strict && hasFilterIssues) {
     process.exitCode = 1;
   }
 }

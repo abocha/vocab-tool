@@ -4,12 +4,52 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { createGunzip } from "node:zlib";
+import {
+  buildFilterConfig,
+  tokenizeSentence,
+  isProperNounLike,
+  isUnsafe,
+  isAcronym,
+  isTooShortAnswer,
+  recordDrop,
+  buildSummaryFragment,
+  lemmaCaseShare,
+  dominantProperNoun,
+  isOrdinal,
+  resolveSurfacePos,
+  isFormulaArtifact,
+} from "./filter-utils.js";
 
 const ALLOWED_POS = new Set(["NOUN", "VERB", "ADJ", "ADV"]);
 const DEFAULT_LEVEL = "A2";
 const SOURCE = "simplewiki";
 const LICENSE = "CC BY-SA";
 const SURFACE_FORM_PATTERN = /^[a-z][a-z'\u2019-]{0,31}$/i;
+
+function readBooleanOption(options, key, defaultValue) {
+  if (!options.has(key)) {
+    return defaultValue;
+  }
+  const raw = options.get(key);
+  if (raw === "" || raw == null) {
+    return true;
+  }
+  const lower = String(raw).toLowerCase();
+  if (["false", "off", "0", "no"].includes(lower)) {
+    return false;
+  }
+  if (["true", "on", "1", "yes"].includes(lower)) {
+    return true;
+  }
+  return defaultValue;
+}
+
+function readPathOption(options, key) {
+  if (!options.has(key)) return null;
+  const value = options.get(key);
+  if (!value) return null;
+  return value;
+}
 
 function toNumber(value) {
   if (value == null || value === "") return null;
@@ -39,22 +79,6 @@ function normalizeSurfaceForm(value) {
     return "";
   }
   return normalized;
-}
-
-function resolveSurfacePos(surface, surfacePosCounts) {
-  if (!surface || !surfacePosCounts) return "";
-  const posCounts = surfacePosCounts.get(surface);
-  if (!posCounts) return "";
-  let bestPos = "";
-  let bestScore = -Infinity;
-  for (const [pos, count] of posCounts.entries()) {
-    if (!ALLOWED_POS.has(pos)) continue;
-    if (count > bestScore) {
-      bestScore = count;
-      bestPos = pos;
-    }
-  }
-  return bestPos;
 }
 
 function parseArgs(argv) {
@@ -176,6 +200,8 @@ async function collectFreqStats({ filePath, limit }) {
         posEvidence: new Map(),
         examples: new Map(),
         forms: new Set([lemma]),
+        rawPosCounts: new Map(),
+        caseStats: { lower: 0, capital: 0, upper: 0 },
         collocationBuckets: {
           adjForNoun: new Map(),
           nounForVerb: new Map(),
@@ -233,11 +259,25 @@ async function collectTokenData({ filePath, lemmas }) {
     const entry = lemmas.get(lemma);
     if (!entry) continue;
 
-    const pos = normalizePos(pick(row, ["upos", "pos", "xpos", "tag"]));
-    const surfaceRaw = pick(row, ["token", "word", "surface", "text"]);
-    const surface = normalizeSurfaceForm(surfaceRaw);
     const weightValue = pick(row, ["count", "freq", "frequency", "token_count"]);
     const weight = toNumber(weightValue) ?? 1;
+    const pos = normalizePos(pick(row, ["upos", "pos", "xpos", "tag"]));
+    if (pos) {
+      entry.rawPosCounts.set(pos, (entry.rawPosCounts.get(pos) ?? 0) + weight);
+    }
+    const surfaceOriginal = pick(row, ["token", "word", "surface", "text"]);
+    const surface = normalizeSurfaceForm(surfaceOriginal);
+
+    if (surfaceOriginal) {
+      const trimmed = String(surfaceOriginal).trim();
+      if (trimmed === trimmed.toLowerCase()) {
+        entry.caseStats.lower += weight;
+      } else if (trimmed === trimmed.toUpperCase()) {
+        entry.caseStats.upper += weight;
+      } else if (/^[A-Z]/.test(trimmed)) {
+        entry.caseStats.capital += weight;
+      }
+    }
 
     if (ALLOWED_POS.has(pos)) {
       entry.posCounts.set(pos, (entry.posCounts.get(pos) ?? 0) + weight);
@@ -251,6 +291,9 @@ async function collectTokenData({ filePath, lemmas }) {
 
     if (surface) {
       entry.forms.add(surface);
+      if (pos) {
+        bumpSurfacePos(surface, pos, weight);
+      }
     }
   }
 
@@ -434,20 +477,7 @@ function isSentenceEligible(sentence) {
   return length >= 40 && length <= 120;
 }
 
-function collectTokensFromSentence(sentence) {
-  const lowered = sentence.toLowerCase();
-  const rawTokens = lowered.split(/[^a-z'\u2019-]+/);
-  const tokens = new Set();
-  for (const rawToken of rawTokens) {
-    const normalized = normalizeSurfaceForm(rawToken);
-    if (normalized) {
-      tokens.add(normalized);
-    }
-  }
-  return tokens;
-}
-
-async function collectExamples({ filePath, lemmas, maxExamples, formIndex }) {
+async function collectExamples({ filePath, lemmas, maxExamples, formIndex, filterConfig, dropSummary }) {
   try {
     await fs.access(filePath);
   } catch (error) {
@@ -461,40 +491,87 @@ async function collectExamples({ filePath, lemmas, maxExamples, formIndex }) {
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   const usingSurfaceForms = formIndex instanceof Map && formIndex.size > 0;
-  let exampleMatchesTried = 0;
+  let exampleMatchesAccepted = 0;
 
   for await (const rawLine of rl) {
     const sentence = normalizeSentence(rawLine);
     if (!isSentenceEligible(sentence)) continue;
-    const tokens = collectTokensFromSentence(sentence);
-    if (tokens.size === 0) continue;
-    const sentenceKey = sentence.toLowerCase();
-    if (usingSurfaceForms) {
-      for (const token of tokens) {
-        const candidates = formIndex.get(token);
-        if (!candidates) continue;
-        for (const entry of candidates) {
-          if (entry.examples.size >= maxExamples) continue;
-          if (entry.examples.has(sentenceKey)) continue;
-          entry.examples.set(sentenceKey, sentence);
-          exampleMatchesTried += 1;
-        }
-      }
+    if (filterConfig.sfw && isUnsafe(sentence, filterConfig.blocklist, true)) {
+      recordDrop(dropSummary, "unsafe", sentence.slice(0, 160));
       continue;
     }
 
-    for (const token of tokens) {
-      if (!tracked.has(token)) continue;
-      const entry = lemmas.get(token);
-      if (!entry) continue;
-      if (entry.examples.size >= maxExamples) continue;
-      if (entry.examples.has(sentenceKey)) continue;
-      entry.examples.set(sentenceKey, sentence);
-      exampleMatchesTried += 1;
+    const tokens = tokenizeSentence(sentence);
+    if (tokens.length === 0) continue;
+    const sentenceKey = sentence.toLowerCase();
+
+    for (let i = 0; i < tokens.length; i += 1) {
+      const tokenInfo = tokens[i];
+      const normalized = tokenInfo.normalized;
+      if (!normalized) continue;
+      let candidates = [];
+      if (usingSurfaceForms) {
+        const bucket = formIndex.get(normalized);
+        if (bucket) {
+          candidates = bucket;
+        }
+      } else if (lemmas.has(normalized)) {
+        candidates = [lemmas.get(normalized)];
+      }
+
+      if (candidates.length === 0) continue;
+
+      for (const entry of candidates) {
+        if (!entry) continue;
+        if (entry.examples.size >= maxExamples) continue;
+        if (entry.examples.has(sentenceKey)) continue;
+
+        if (
+          isAcronym(tokenInfo.surface, filterConfig.acronymMinLen, filterConfig.allowlist)
+        ) {
+          recordDrop(
+            dropSummary,
+            "acronym",
+            `${tokenInfo.surface} :: ${sentence.slice(0, 120)}`,
+          );
+          continue;
+        }
+
+        if (isFormulaArtifact(tokenInfo.surface)) {
+          recordDrop(
+            dropSummary,
+            "formula",
+            `${tokenInfo.surface} :: ${sentence.slice(0, 120)}`,
+          );
+          continue;
+        }
+
+        const proper = isProperNounLike({
+          entry,
+          surface: tokenInfo.surface,
+          tokens,
+          index: i,
+          sentenceInitial: i === 0,
+          properSet: filterConfig.properContext,
+          nationalitySet: filterConfig.nationalities,
+          config: filterConfig,
+        });
+        if (proper) {
+          recordDrop(
+            dropSummary,
+            "proper",
+            `${tokenInfo.surface} :: ${sentence.slice(0, 120)}`,
+          );
+          continue;
+        }
+
+        entry.examples.set(sentenceKey, sentence);
+        exampleMatchesAccepted += 1;
+      }
     }
   }
 
-  return { exampleMatchesTried };
+  return { exampleMatchesTried: exampleMatchesAccepted };
 }
 
 function pickPos(entry) {
@@ -625,7 +702,7 @@ function logSummary({
   lemmasWithForms,
   formsIndexed,
   exampleMatchesTried,
-}) {
+}, extras = {}) {
   const summary = {
     lemmasSeen,
     cardsEmitted: cards.length,
@@ -639,6 +716,7 @@ function logSummary({
     formsIndexed,
     exampleMatchesTried,
   };
+  Object.assign(summary, extras);
   console.log(JSON.stringify(summary, null, 2));
 }
 
@@ -650,6 +728,13 @@ async function main() {
   const minColloc = Math.max(1, toNumber(opts.get("--minColloc")) ?? 5);
   const maxColloc = Math.max(minColloc, toNumber(opts.get("--maxColloc")) ?? 8);
   const showSamples = opts.has("--showSamples");
+  const sfw = readBooleanOption(opts, "--sfw", true);
+  const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
+  const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
+  const blockListPath = readPathOption(opts, "--blockList");
+  const allowListPath = readPathOption(opts, "--allowList");
+  const properListPath = readPathOption(opts, "--properList");
+  const nationalitiesPath = readPathOption(opts, "--nationalities");
 
   const freqPath = opts.get("--freq")
     ? path.resolve(opts.get("--freq"))
@@ -665,6 +750,17 @@ async function main() {
     ? path.resolve(opts.get("--out"))
     : path.resolve(process.cwd(), "cards/draft_cards.jsonl");
 
+  const filterConfig = await buildFilterConfig({
+    cwd: process.cwd(),
+    blockListPath,
+    allowListPath,
+    properListPath,
+    nationalitiesPath,
+    acronymMinLen,
+    dropProperNouns,
+    sfw,
+  });
+
   console.log(
     JSON.stringify(
       {
@@ -679,6 +775,9 @@ async function main() {
         maxExamples,
         minColloc,
         maxColloc,
+        sfw,
+        dropProperNouns,
+        acronymMinLen,
       },
       null,
       2,
@@ -687,13 +786,30 @@ async function main() {
 
   const { totalTokens, lemmas } = await collectFreqStats({ filePath: freqPath, limit });
   const lemmasSeen = lemmas.size;
+  const dropSummary = {};
 
-  const { formIndex, lemmasWithForms, formsIndexed, surfacePosCounts } = await collectTokenData({ filePath: tokensPath, lemmas });
+  const { formIndex, lemmasWithForms, formsIndexed, surfacePosCounts } = await collectTokenData({
+    filePath: tokensPath,
+    lemmas,
+  });
   if (formIndex && formIndex.size > 0 && lemmasWithForms > 0) {
     console.log("Using surface-form matching via tokens corpus (tokens.csv[.gz]).");
   }
-  await collectBigrams({ filePath: bigramPath, lemmas, minColloc, formIndex, surfacePosCounts });
-  const { exampleMatchesTried } = await collectExamples({ filePath: sentencesPath, lemmas, maxExamples, formIndex });
+  await collectBigrams({
+    filePath: bigramPath,
+    lemmas,
+    minColloc,
+    formIndex,
+    surfacePosCounts,
+  });
+  const { exampleMatchesTried } = await collectExamples({
+    filePath: sentencesPath,
+    lemmas,
+    maxExamples,
+    formIndex,
+    filterConfig,
+    dropSummary,
+  });
 
   const cards = [];
   let totalExamples = 0;
@@ -711,6 +827,63 @@ async function main() {
 
     const examples = finalizeExamples(entry).slice(0, maxExamples);
     const collocations = finalizeCollocations(entry, pos, { min: 2, max: maxColloc });
+
+    if (filterConfig.dropProperNouns) {
+      if (dominantProperNoun(entry)) {
+        recordDrop(dropSummary, "proper", entry.lemma);
+        continue;
+      }
+      const lowerShare = lemmaCaseShare(entry);
+      if (lowerShare > 0 && lowerShare < 0.6) {
+        recordDrop(dropSummary, "proper", entry.lemma);
+        continue;
+      }
+      if (isOrdinal(entry.lemma)) {
+        recordDrop(dropSummary, "ordinal", entry.lemma);
+        continue;
+      }
+    }
+
+    if (isAcronym(entry.lemma, filterConfig.acronymMinLen, filterConfig.allowlist)) {
+      recordDrop(dropSummary, "acronym", entry.lemma);
+      continue;
+    }
+
+    if (isFormulaArtifact(entry.lemma)) {
+      recordDrop(dropSummary, "formula", entry.lemma);
+      continue;
+    }
+
+    if (isTooShortAnswer(entry.lemma)) {
+      recordDrop(dropSummary, "length", entry.lemma);
+      continue;
+    }
+
+    if (
+      filterConfig.sfw &&
+      examples.some((example) => isUnsafe(example, filterConfig.blocklist, true))
+    ) {
+      recordDrop(
+        dropSummary,
+        "unsafe",
+        `${entry.lemma} :: ${examples[0]?.slice(0, 120) ?? ""}`,
+      );
+      continue;
+    }
+
+    if (
+      examples.some((example) => example && example.toLowerCase().includes("formula_"))
+    ) {
+      recordDrop(dropSummary, "formula", `${entry.lemma}`);
+      continue;
+    }
+
+    for (const key of Object.keys(collocations)) {
+      collocations[key] = collocations[key].filter(
+        (value) => !isAcronym(value, filterConfig.acronymMinLen, filterConfig.allowlist),
+      );
+    }
+
     const collocCount = Object.values(collocations).reduce((sum, arr) => sum + arr.length, 0);
 
     if (examples.length === 0 || collocCount < 2) {
@@ -749,6 +922,8 @@ async function main() {
 
   await writeJsonl(outputPath, cards);
 
+  const summaryExtras = buildSummaryFragment(dropSummary);
+
   logSummary({
     lemmasSeen,
     cards,
@@ -761,7 +936,7 @@ async function main() {
     lemmasWithForms,
     formsIndexed,
     exampleMatchesTried,
-  });
+  }, summaryExtras);
 
   if (showSamples) {
     const samples = chooseSamples(cards, 5);

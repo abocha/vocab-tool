@@ -86,6 +86,7 @@ npm run packs:validate -- --dir public/packs/A2 --type auto
 - `cards/draft_cards.jsonl` stores one JSON object per line with the schema described in `/docs/06-cards-data-model.md`.
 - The pack builders keep the same column headers and shapes defined in `/docs/03-csv-pack-spec.md`, and every CSV export is written with a UTF-8 BOM so Excel opens them without mangling characters.
 - The validator CLI summarises totals, drops, and heuristic warnings per file; it exits non-zero only when a file is unreadable or missing required headers.
+- Filtering heuristics strip named entities, unsafe phrases, and short acronyms by default. Tweak the lists under `filter-lists/` or toggle behaviour with `--sfw`, `--dropProperNouns`, `--acronymMinLen`, and related flags.
 
 When iterating on the corpus heuristics, avoid renaming columns—the Pack Inspector and the React app expect the stable schemas shipped in Phase 1.
 
@@ -107,8 +108,11 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 - `npm run preview` — preview the production build locally.
 - `npm run prepare:packs` — copy/sample CSV packs (see above).
 - `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (examples, collocations, frequency metadata).
+- `npm run cards:filter` — regenerate cards with safety/proper-noun guards enabled.
 - `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards.
+- `npm run packs:from-cards:safe` — build packs with the same guards applied at exercise time.
 - `npm run packs:validate` — run the pack validator summary over one or more levels.
+- `npm run packs:validate:strict` — validator with strict exit code if any guard flags trigger.
 
 ## Deploying
 

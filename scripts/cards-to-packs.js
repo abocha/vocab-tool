@@ -3,6 +3,17 @@ import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import {
+  buildFilterConfig,
+  tokenizeSentence,
+  isProperNounLike,
+  isUnsafe,
+  isAcronym,
+  recordDrop,
+  buildSummaryFragment,
+  mergeDropSummaries,
+  isFormulaArtifact,
+} from "./filter-utils.js";
 
 const SOURCE_FALLBACK = "simplewiki";
 const LICENSE_FALLBACK = "CC BY-SA";
@@ -11,6 +22,27 @@ const GAPFILL_MAX_LENGTH = 120;
 const MATCHING_MIN_PAIRS = 2;
 const MATCHING_MAX_PAIRS = 12;
 const DISTRACTOR_TOLERANCE = 0.3;
+
+function readBooleanOption(options, key, defaultValue) {
+  if (!options.has(key)) {
+    return defaultValue;
+  }
+  const raw = options.get(key);
+  if (raw === "" || raw == null) {
+    return true;
+  }
+  const lower = String(raw).toLowerCase();
+  if (["false", "off", "0", "no"].includes(lower)) return false;
+  if (["true", "on", "1", "yes"].includes(lower)) return true;
+  return defaultValue;
+}
+
+function readPathOption(options, key) {
+  if (!options.has(key)) return null;
+  const value = options.get(key);
+  if (!value) return null;
+  return value;
+}
 
 function parseArgs(argv) {
   const opts = new Map();
@@ -47,7 +79,30 @@ function attemptCloze(sentence, lemma) {
   if (trimmed.length > GAPFILL_MAX_LENGTH) {
     return { success: false, reason: "long" };
   }
-  return { success: true, prompt: trimmed, answer };
+  const tokens = tokenizeSentence(sentence);
+  let targetIndex = -1;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (!token) continue;
+    const tokenEnd = token.index + token.surface.length;
+    const matchStart = matched.index ?? sentence.indexOf(answer);
+    const matchEnd = matchStart + answer.length;
+    if (token.index === matchStart || (token.index <= matchStart && tokenEnd >= matchEnd)) {
+      targetIndex = i;
+      break;
+    }
+    if (token.surface.toLowerCase() === answer.toLowerCase() && targetIndex === -1) {
+      targetIndex = i;
+    }
+  }
+  return {
+    success: true,
+    prompt: trimmed,
+    answer,
+    sentence,
+    tokens,
+    targetIndex,
+  };
 }
 
 function normalizePrompt(prompt) {
@@ -78,6 +133,46 @@ function deterministicShuffle(items, seed) {
   return result;
 }
 
+function evaluateSurface({ surface, tokens, index, sentence, filterConfig, dropSummary }) {
+  if (!surface) return null;
+  if (isFormulaArtifact(surface)) {
+    recordDrop(dropSummary, "formula", `${surface} :: ${sentence?.slice(0, 120) ?? ""}`);
+    return "formula";
+  }
+  if (isAcronym(surface, filterConfig.acronymMinLen, filterConfig.allowlist)) {
+    recordDrop(dropSummary, "acronym", `${surface} :: ${sentence?.slice(0, 120) ?? ""}`);
+    return "acronym";
+  }
+
+  const proper = isProperNounLike({
+    entry: null,
+    surface,
+    tokens,
+    index,
+    sentenceInitial: index === 0,
+    properSet: filterConfig.properContext,
+    nationalitySet: filterConfig.nationalities,
+    config: filterConfig,
+  });
+
+  if (proper) {
+    recordDrop(dropSummary, "proper", `${surface} :: ${sentence?.slice(0, 120) ?? ""}`);
+    return "proper";
+  }
+
+  return null;
+}
+
+function checkUnsafeText(text, filterConfig, dropSummary) {
+  if (!filterConfig.sfw) return null;
+  if (!text) return null;
+  if (isUnsafe(text, filterConfig.blocklist, true)) {
+    recordDrop(dropSummary, "unsafe", text.slice(0, 160));
+    return "unsafe";
+  }
+  return null;
+}
+
 async function loadCards(filePath) {
   const cards = [];
   const stream = createReadStream(filePath);
@@ -98,7 +193,7 @@ async function loadCards(filePath) {
   return cards;
 }
 
-function buildGapfillRows({ cards, level, limit }) {
+function buildGapfillRows({ cards, level, limit, filterConfig }) {
   const rows = [];
   const seenPrompts = new Set();
   const stats = {
@@ -108,7 +203,9 @@ function buildGapfillRows({ cards, level, limit }) {
     droppedDuplicate: 0,
     droppedShort: 0,
     droppedLong: 0,
+    filteredByGuards: 0,
   };
+  const dropSummary = {};
 
   for (const card of cards) {
     if (!Array.isArray(card.examples) || card.examples.length === 0) {
@@ -144,6 +241,38 @@ function buildGapfillRows({ cards, level, limit }) {
       continue;
     }
 
+    const unsafeReason = checkUnsafeText(cloze.sentence ?? card.examples[0], filterConfig, dropSummary);
+    if (unsafeReason) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
+    const tokens = cloze.tokens ?? tokenizeSentence(cloze.sentence ?? card.examples[0]);
+    let targetIndex = cloze.targetIndex ?? -1;
+    if (targetIndex < 0) {
+      const lowerAnswer = cloze.answer.toLowerCase();
+      targetIndex = tokens.findIndex((token) => token.surface.toLowerCase() === lowerAnswer);
+    }
+
+    const surfaceReason = evaluateSurface({
+      surface: cloze.answer,
+      tokens,
+      index: targetIndex >= 0 ? targetIndex : 0,
+      sentence: cloze.sentence ?? card.examples[0],
+      filterConfig,
+      dropSummary,
+    });
+    if (surfaceReason) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
+    const promptUnsafe = checkUnsafeText(cloze.prompt, filterConfig, dropSummary);
+    if (promptUnsafe) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
     const normalized = normalizePrompt(cloze.prompt);
     if (seenPrompts.has(normalized)) {
       stats.droppedDuplicate += 1;
@@ -163,7 +292,7 @@ function buildGapfillRows({ cards, level, limit }) {
     if (limit && rows.length >= limit) break;
   }
 
-  return { rows, stats };
+  return { rows, stats, dropSummary };
 }
 
 function formatMatchingPair({ collocate, lemma, slot }) {
@@ -172,7 +301,7 @@ function formatMatchingPair({ collocate, lemma, slot }) {
   return { left, right, slot };
 }
 
-function buildMatchingRows({ cards, level, limit }) {
+function buildMatchingRows({ cards, level, limit, filterConfig }) {
   const rows = [];
   const seenRows = new Set();
   const stats = {
@@ -180,7 +309,9 @@ function buildMatchingRows({ cards, level, limit }) {
     skippedNoPairs: 0,
     droppedDuplicate: 0,
     truncated: 0,
+    filteredByGuards: 0,
   };
+  const dropSummary = {};
 
   for (const card of cards) {
     if (!card || typeof card.lemma !== "string" || typeof card.collocations !== "object" || card.collocations === null) {
@@ -196,6 +327,45 @@ function buildMatchingRows({ cards, level, limit }) {
         const pair = formatMatchingPair({ collocate: collocate.trim(), lemma: card.lemma, slot });
         const key = normalizePair(pair.left, pair.right);
         if (pairKeys.has(key)) return;
+
+        const sentence = `the ${pair.left} ${pair.right}`;
+        const tokens = [
+          { surface: "the", normalized: "the", index: 0 },
+          { surface: pair.left, normalized: pair.left.toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
+          { surface: pair.right, normalized: pair.right.toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
+        ];
+        const leftReason = evaluateSurface({
+          surface: pair.left,
+          tokens,
+          index: 1,
+          sentence,
+          filterConfig,
+          dropSummary,
+        });
+        if (leftReason) {
+          stats.filteredByGuards += 1;
+          return;
+        }
+
+        const rightReason = evaluateSurface({
+          surface: pair.right,
+          tokens,
+          index: 2,
+          sentence,
+          filterConfig,
+          dropSummary,
+        });
+        if (rightReason) {
+          stats.filteredByGuards += 1;
+          return;
+        }
+
+        const unsafeReason = checkUnsafeText(sentence, filterConfig, dropSummary);
+        if (unsafeReason) {
+          stats.filteredByGuards += 1;
+          return;
+        }
+
         pairKeys.add(key);
         pairs.push(pair);
       });
@@ -233,7 +403,7 @@ function buildMatchingRows({ cards, level, limit }) {
     if (limit && rows.length >= limit) break;
   }
 
-  return { rows, stats };
+  return { rows, stats, dropSummary };
 }
 
 function isSimilarLemma(a, b) {
@@ -278,7 +448,7 @@ function selectDistractors(card, candidates) {
   return distractors;
 }
 
-function buildMcqRows({ cards, limit }) {
+function buildMcqRows({ cards, limit, filterConfig }) {
   const rows = [];
   const seenPrompts = new Set();
   const stats = {
@@ -288,7 +458,9 @@ function buildMcqRows({ cards, limit }) {
     droppedDuplicate: 0,
     distractorCoverage: 0,
     attempted: 0,
+    filteredByGuards: 0,
   };
+  const dropSummary = {};
 
   const byPos = new Map();
   for (const card of cards) {
@@ -318,9 +490,41 @@ function buildMcqRows({ cards, limit }) {
       continue;
     }
 
+    const unsafeSentence = checkUnsafeText(cloze.sentence ?? card.examples[0], filterConfig, dropSummary);
+    if (unsafeSentence) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
     const promptKey = normalizePrompt(cloze.prompt);
     if (seenPrompts.has(promptKey)) {
       stats.droppedDuplicate += 1;
+      continue;
+    }
+
+    const tokens = cloze.tokens ?? tokenizeSentence(cloze.sentence ?? card.examples[0]);
+    let targetIndex = cloze.targetIndex ?? -1;
+    if (targetIndex < 0) {
+      const lowerAnswer = cloze.answer.toLowerCase();
+      targetIndex = tokens.findIndex((token) => token.surface.toLowerCase() === lowerAnswer);
+    }
+
+    const surfaceReason = evaluateSurface({
+      surface: cloze.answer,
+      tokens,
+      index: targetIndex >= 0 ? targetIndex : 0,
+      sentence: cloze.sentence ?? card.examples[0],
+      filterConfig,
+      dropSummary,
+    });
+    if (surfaceReason) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
+    const promptUnsafe = checkUnsafeText(cloze.prompt, filterConfig, dropSummary);
+    if (promptUnsafe) {
+      stats.filteredByGuards += 1;
       continue;
     }
 
@@ -335,6 +539,31 @@ function buildMcqRows({ cards, limit }) {
     stats.distractorCoverage += 1;
 
     const options = deterministicShuffle([cloze.answer, ...distractors], `${card.lemma}|${cloze.prompt}`);
+
+    const optionsUnsafe = checkUnsafeText(options.join(" "), filterConfig, dropSummary);
+    if (optionsUnsafe) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
+    let dropOption = false;
+    for (const option of options) {
+      if (isAcronym(option, filterConfig.acronymMinLen, filterConfig.allowlist)) {
+        recordDrop(dropSummary, "acronym", option);
+        dropOption = true;
+        break;
+      }
+      if (checkUnsafeText(option, filterConfig, dropSummary)) {
+        dropOption = true;
+        break;
+      }
+    }
+
+    if (dropOption) {
+      stats.filteredByGuards += 1;
+      continue;
+    }
+
     rows.push([
       "mcq",
       cloze.prompt,
@@ -351,7 +580,7 @@ function buildMcqRows({ cards, limit }) {
   const coverage = stats.attempted === 0 ? 0 : Number(((stats.distractorCoverage / stats.attempted) * 100).toFixed(1));
   stats.distractorCoverage = coverage;
 
-  return { rows, stats };
+  return { rows, stats, dropSummary };
 }
 
 function csvEscape(value) {
@@ -371,7 +600,7 @@ async function writeCsv(filePath, header, rows) {
   await fs.writeFile(filePath, `${bom}${lines.join("\n")}\n`, "utf8");
 }
 
-function logSummary({ gapfill, matching, mcq, outputDir }) {
+function logSummary({ gapfill, matching, mcq, outputDir }, extras = {}) {
   const summary = {
     task: "cards-to-packs",
     outputDir,
@@ -379,6 +608,7 @@ function logSummary({ gapfill, matching, mcq, outputDir }) {
     matching,
     mcq,
   };
+  Object.assign(summary, extras);
   console.log(JSON.stringify(summary, null, 2));
 }
 
@@ -395,6 +625,24 @@ async function main() {
   const limitGapfill = toNumber(opts.get("--limitGapfill")) ?? 0;
   const limitMatching = toNumber(opts.get("--limitMatching")) ?? 0;
   const limitMcq = toNumber(opts.get("--limitMcq")) ?? 0;
+  const sfw = readBooleanOption(opts, "--sfw", true);
+  const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
+  const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
+  const blockListPath = readPathOption(opts, "--blockList");
+  const allowListPath = readPathOption(opts, "--allowList");
+  const properListPath = readPathOption(opts, "--properList");
+  const nationalitiesPath = readPathOption(opts, "--nationalities");
+
+  const filterConfig = await buildFilterConfig({
+    cwd: process.cwd(),
+    blockListPath,
+    allowListPath,
+    properListPath,
+    nationalitiesPath,
+    acronymMinLen,
+    dropProperNouns,
+    sfw,
+  });
 
   console.log(
     JSON.stringify(
@@ -406,6 +654,9 @@ async function main() {
         limitGapfill: limitGapfill || null,
         limitMatching: limitMatching || null,
         limitMcq: limitMcq || null,
+        sfw,
+        dropProperNouns,
+        acronymMinLen,
       },
       null,
       2,
@@ -414,33 +665,40 @@ async function main() {
 
   const cards = await loadCards(cardsPath);
 
-  const gapfill = buildGapfillRows({ cards, level, limit: limitGapfill });
+  const combinedDropSummary = {};
+
+  const gapfill = buildGapfillRows({ cards, level, limit: limitGapfill, filterConfig });
+  mergeDropSummaries(combinedDropSummary, gapfill.dropSummary);
   await writeCsv(
     path.join(outDir, "gapfill.csv"),
     ["level", "type", "prompt", "answer", "source", "license"],
     gapfill.rows,
   );
 
-  const matching = buildMatchingRows({ cards, level, limit: limitMatching });
+  const matching = buildMatchingRows({ cards, level, limit: limitMatching, filterConfig });
+  mergeDropSummaries(combinedDropSummary, matching.dropSummary);
   await writeCsv(
     path.join(outDir, "matching.csv"),
     ["level", "type", "left", "right", "source", "license", "count"],
     matching.rows,
   );
 
-  const mcq = buildMcqRows({ cards, limit: limitMcq });
+  const mcq = buildMcqRows({ cards, limit: limitMcq, filterConfig });
+  mergeDropSummaries(combinedDropSummary, mcq.dropSummary);
   await writeCsv(
     path.join(outDir, "mcq.csv"),
     ["type", "prompt", "options", "answer", "source", "license"],
     mcq.rows,
   );
 
+  const summaryExtras = buildSummaryFragment(combinedDropSummary);
+
   logSummary({
     gapfill: gapfill.stats,
     matching: matching.stats,
     mcq: mcq.stats,
     outputDir: outDir,
-  });
+  }, summaryExtras);
 }
 
 main().catch((error) => {
