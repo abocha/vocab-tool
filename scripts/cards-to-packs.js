@@ -164,13 +164,78 @@ function evaluateSurface({ surface, tokens, index, sentence, filterConfig, dropS
 }
 
 function checkUnsafeText(text, filterConfig, dropSummary) {
-  if (!filterConfig.sfw) return null;
+  if (!filterConfig.sfwPatterns || filterConfig.sfwPatterns.length === 0) return null;
   if (!text) return null;
-  if (isUnsafe(text, filterConfig.blocklist, true)) {
-    recordDrop(dropSummary, "unsafe", text.slice(0, 160));
-    return "unsafe";
+  if (isUnsafe(text, filterConfig.sfwPatterns, filterConfig.sfwAllowPatterns)) {
+    recordDrop(dropSummary, "sfw", text.slice(0, 160));
+    return "sfw";
   }
   return null;
+}
+
+function normalizeOptionValue(value) {
+  return value ? value.toLowerCase().replace(/[^a-z0-9]+/g, "") : "";
+}
+
+function levenshteinDistance(a, b) {
+  const s = a;
+  const t = b;
+  const m = s.length;
+  const n = t.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i += 1) dp[i][0] = i;
+  for (let j = 0; j <= n; j += 1) dp[0][j] = j;
+  for (let i = 1; i <= m; i += 1) {
+    for (let j = 1; j <= n; j += 1) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+function hasNearDuplicateOptions(options, answer) {
+  const normalized = options.map((option) => normalizeOptionValue(option));
+  for (let i = 0; i < normalized.length; i += 1) {
+    for (let j = i + 1; j < normalized.length; j += 1) {
+      const a = normalized[i];
+      const b = normalized[j];
+      if (!a || !b) continue;
+      if (a === b) return true;
+      if (levenshteinDistance(a, b) <= 1) return true;
+      const shorter = a.length <= b.length ? a : b;
+      const longer = a.length > b.length ? a : b;
+      if (shorter.length > 0 && shorter.length < 6 && longer.includes(shorter)) {
+        return true;
+      }
+    }
+  }
+  const answerNorm = normalizeOptionValue(answer);
+  for (const option of normalized) {
+    if (!option) continue;
+    if (option === answerNorm) continue;
+    const shorter = option.length <= answerNorm.length ? option : answerNorm;
+    const longer = option.length > answerNorm.length ? option : answerNorm;
+    if (shorter.length > 0 && shorter.length < 6 && longer.includes(shorter)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function generateDistractorCombos(pool, maxCombos = 12) {
+  const combos = [];
+  const n = pool.length;
+  for (let i = 0; i < n && combos.length < maxCombos; i += 1) {
+    for (let j = i + 1; j < n && combos.length < maxCombos; j += 1) {
+      for (let k = j + 1; k < n && combos.length < maxCombos; k += 1) {
+        combos.push([pool[i], pool[j], pool[k]]);
+      }
+    }
+  }
+  return combos;
 }
 
 async function loadCards(filePath) {
@@ -413,7 +478,7 @@ function isSimilarLemma(a, b) {
   return a.startsWith(b) || b.startsWith(a);
 }
 
-function selectDistractors(card, candidates) {
+function selectDistractors(card, candidates, maxCandidates = 9) {
   const targetZipf = typeof card.freq_zipf === "number" ? card.freq_zipf : null;
   const filtered = candidates.filter((candidate) => {
     if (candidate.lemma === card.lemma) return false;
@@ -440,10 +505,12 @@ function selectDistractors(card, candidates) {
   const distractors = [];
   for (const candidate of filtered) {
     const lemma = candidate.lemma;
-    if (!lemma || seen.has(lemma.toLowerCase())) continue;
-    seen.add(lemma.toLowerCase());
+    if (!lemma) continue;
+    const lower = lemma.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
     distractors.push(lemma);
-    if (distractors.length >= 3) break;
+    if (distractors.length >= maxCandidates) break;
   }
   return distractors;
 }
@@ -459,6 +526,7 @@ function buildMcqRows({ cards, limit, filterConfig }) {
     distractorCoverage: 0,
     attempted: 0,
     filteredByGuards: 0,
+    nearDuplicateDrops: 0,
   };
   const dropSummary = {};
 
@@ -530,24 +598,45 @@ function buildMcqRows({ cards, limit, filterConfig }) {
 
     stats.attempted += 1;
     const candidates = byPos.get(card.pos.toUpperCase()) ?? [];
-    const distractors = selectDistractors(card, candidates);
-    if (distractors.length < 3) {
+    const distractorPool = selectDistractors(card, candidates);
+    if (distractorPool.length < 3) {
       stats.skippedNoDistractors += 1;
       continue;
     }
 
     stats.distractorCoverage += 1;
 
-    const options = deterministicShuffle([cloze.answer, ...distractors], `${card.lemma}|${cloze.prompt}`);
+    const combos = generateDistractorCombos(distractorPool);
+    let selectedOptions = null;
+    for (let comboIndex = 0; comboIndex < combos.length; comboIndex += 1) {
+      const combo = combos[comboIndex];
+      if (combo.length < 3) continue;
+      const shuffled = deterministicShuffle(
+        [cloze.answer, ...combo],
+        `${card.lemma}|${cloze.prompt}|${comboIndex}`,
+      );
+      if (hasNearDuplicateOptions(shuffled, cloze.answer)) {
+        continue;
+      }
+      selectedOptions = shuffled;
+      break;
+    }
 
-    const optionsUnsafe = checkUnsafeText(options.join(" "), filterConfig, dropSummary);
+    if (!selectedOptions) {
+      stats.filteredByGuards += 1;
+      stats.nearDuplicateDrops += 1;
+      recordDrop(dropSummary, "nearDuplicate", cloze.prompt.slice(0, 160));
+      continue;
+    }
+
+    const optionsUnsafe = checkUnsafeText(selectedOptions.join(" "), filterConfig, dropSummary);
     if (optionsUnsafe) {
       stats.filteredByGuards += 1;
       continue;
     }
 
     let dropOption = false;
-    for (const option of options) {
+    for (const option of selectedOptions) {
       if (isAcronym(option, filterConfig.acronymMinLen, filterConfig.allowlist)) {
         recordDrop(dropSummary, "acronym", option);
         dropOption = true;
@@ -567,7 +656,7 @@ function buildMcqRows({ cards, limit, filterConfig }) {
     rows.push([
       "mcq",
       cloze.prompt,
-      options.join("|"),
+      selectedOptions.join("|"),
       cloze.answer,
       card.source ?? SOURCE_FALLBACK,
       card.license ?? LICENSE_FALLBACK,
@@ -625,13 +714,29 @@ async function main() {
   const limitGapfill = toNumber(opts.get("--limitGapfill")) ?? 0;
   const limitMatching = toNumber(opts.get("--limitMatching")) ?? 0;
   const limitMcq = toNumber(opts.get("--limitMcq")) ?? 0;
-  const sfw = readBooleanOption(opts, "--sfw", true);
+  const sfwLevelRaw = opts.get("--sfwLevel") ? String(opts.get("--sfwLevel")).toLowerCase() : null;
+  const sfwFlag = readBooleanOption(opts, "--sfw", true);
+  let sfwLevel = sfwLevelRaw;
+  let sfw = sfwFlag;
+  if (sfwLevel) {
+    if (sfwLevel === "off") {
+      sfw = false;
+    } else if (sfwLevel === "default" || sfwLevel === "strict") {
+      sfw = true;
+    } else {
+      sfwLevel = "default";
+      sfw = true;
+    }
+  } else {
+    sfwLevel = sfw ? "default" : "off";
+  }
   const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
   const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
   const blockListPath = readPathOption(opts, "--blockList");
   const allowListPath = readPathOption(opts, "--allowList");
   const properListPath = readPathOption(opts, "--properList");
   const nationalitiesPath = readPathOption(opts, "--nationalities");
+  const sfwAllowPath = readPathOption(opts, "--sfwAllow");
 
   const filterConfig = await buildFilterConfig({
     cwd: process.cwd(),
@@ -642,6 +747,8 @@ async function main() {
     acronymMinLen,
     dropProperNouns,
     sfw,
+    sfwLevel,
+    sfwAllowPath,
   });
 
   console.log(
@@ -655,6 +762,7 @@ async function main() {
         limitMatching: limitMatching || null,
         limitMcq: limitMcq || null,
         sfw,
+        sfwLevel,
         dropProperNouns,
         acronymMinLen,
       },
@@ -692,6 +800,7 @@ async function main() {
   );
 
   const summaryExtras = buildSummaryFragment(combinedDropSummary);
+  summaryExtras.sfwLevel = filterConfig.sfwLevel;
 
   logSummary({
     gapfill: gapfill.stats,

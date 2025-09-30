@@ -496,8 +496,8 @@ async function collectExamples({ filePath, lemmas, maxExamples, formIndex, filte
   for await (const rawLine of rl) {
     const sentence = normalizeSentence(rawLine);
     if (!isSentenceEligible(sentence)) continue;
-    if (filterConfig.sfw && isUnsafe(sentence, filterConfig.blocklist, true)) {
-      recordDrop(dropSummary, "unsafe", sentence.slice(0, 160));
+    if (isUnsafe(sentence, filterConfig.sfwPatterns, filterConfig.sfwAllowPatterns)) {
+      recordDrop(dropSummary, "sfw", sentence.slice(0, 160));
       continue;
     }
 
@@ -728,13 +728,29 @@ async function main() {
   const minColloc = Math.max(1, toNumber(opts.get("--minColloc")) ?? 5);
   const maxColloc = Math.max(minColloc, toNumber(opts.get("--maxColloc")) ?? 8);
   const showSamples = opts.has("--showSamples");
-  const sfw = readBooleanOption(opts, "--sfw", true);
+  const sfwLevelRaw = opts.get("--sfwLevel") ? String(opts.get("--sfwLevel")).toLowerCase() : null;
+  const sfwFlag = readBooleanOption(opts, "--sfw", true);
+  let sfwLevel = sfwLevelRaw;
+  let sfw = sfwFlag;
+  if (sfwLevel) {
+    if (sfwLevel === "off") {
+      sfw = false;
+    } else if (sfwLevel === "default" || sfwLevel === "strict") {
+      sfw = true;
+    } else {
+      sfwLevel = "default";
+      sfw = true;
+    }
+  } else {
+    sfwLevel = sfw ? "default" : "off";
+  }
   const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
   const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
   const blockListPath = readPathOption(opts, "--blockList");
   const allowListPath = readPathOption(opts, "--allowList");
   const properListPath = readPathOption(opts, "--properList");
   const nationalitiesPath = readPathOption(opts, "--nationalities");
+  const sfwAllowPath = readPathOption(opts, "--sfwAllow");
 
   const freqPath = opts.get("--freq")
     ? path.resolve(opts.get("--freq"))
@@ -759,6 +775,8 @@ async function main() {
     acronymMinLen,
     dropProperNouns,
     sfw,
+    sfwLevel,
+    sfwAllowPath,
   });
 
   console.log(
@@ -776,6 +794,7 @@ async function main() {
         minColloc,
         maxColloc,
         sfw,
+        sfwLevel,
         dropProperNouns,
         acronymMinLen,
       },
@@ -860,12 +879,11 @@ async function main() {
     }
 
     if (
-      filterConfig.sfw &&
-      examples.some((example) => isUnsafe(example, filterConfig.blocklist, true))
+      examples.some((example) => isUnsafe(example, filterConfig.sfwPatterns, filterConfig.sfwAllowPatterns))
     ) {
       recordDrop(
         dropSummary,
-        "unsafe",
+        "sfw",
         `${entry.lemma} :: ${examples[0]?.slice(0, 120) ?? ""}`,
       );
       continue;
@@ -923,6 +941,7 @@ async function main() {
   await writeJsonl(outputPath, cards);
 
   const summaryExtras = buildSummaryFragment(dropSummary);
+  summaryExtras.sfwLevel = filterConfig.sfwLevel;
 
   logSummary({
     lemmasSeen,

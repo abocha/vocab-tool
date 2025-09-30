@@ -54,10 +54,10 @@ function readNumberOption(options, key, defaultValue) {
 }
 
 function checkUnsafeText(text, filterConfig, dropSummary) {
-  if (!filterConfig.sfw) return false;
+  if (!filterConfig.sfwPatterns || filterConfig.sfwPatterns.length === 0) return false;
   if (!text) return false;
-  if (isUnsafe(text, filterConfig.blocklist, true)) {
-    recordDrop(dropSummary, "unsafe", text.slice(0, 160));
+  if (isUnsafe(text, filterConfig.sfwPatterns, filterConfig.sfwAllowPatterns)) {
+    recordDrop(dropSummary, "sfw", text.slice(0, 160));
     return true;
   }
   return false;
@@ -665,7 +665,22 @@ async function main() {
     optionMap.set(token, value);
   }
 
-  const sfw = readBooleanOption(optionMap, "--sfw", true);
+  const sfwLevelRaw = optionMap.get("--sfwLevel") ? String(optionMap.get("--sfwLevel")).toLowerCase() : null;
+  const sfwFlag = readBooleanOption(optionMap, "--sfw", true);
+  let sfwLevel = sfwLevelRaw;
+  let sfw = sfwFlag;
+  if (sfwLevel) {
+    if (sfwLevel === "off") {
+      sfw = false;
+    } else if (sfwLevel === "default" || sfwLevel === "strict") {
+      sfw = true;
+    } else {
+      sfwLevel = "default";
+      sfw = true;
+    }
+  } else {
+    sfwLevel = sfw ? "default" : "off";
+  }
   const dropProperNouns = readBooleanOption(optionMap, "--dropProperNouns", true);
   const strict = readBooleanOption(optionMap, "--strict", false);
   const acronymMinLen = readNumberOption(optionMap, "--acronymMinLen", 3);
@@ -673,6 +688,7 @@ async function main() {
   const allowListPath = readPathOption(optionMap, "--allowList");
   const properListPath = readPathOption(optionMap, "--properList");
   const nationalitiesPath = readPathOption(optionMap, "--nationalities");
+  const sfwAllowPath = readPathOption(optionMap, "--sfwAllow");
 
   const filterConfig = await buildFilterConfig({
     cwd: process.cwd(),
@@ -683,6 +699,8 @@ async function main() {
     acronymMinLen,
     dropProperNouns,
     sfw,
+    sfwLevel,
+    sfwAllowPath,
   });
 
   const collected = await collectFiles({ packs, dir });
@@ -726,6 +744,7 @@ async function main() {
   }
 
   const summary = formatSummary(results, combinedFilterSummary);
+  summary.sfwLevel = filterConfig.sfwLevel;
   console.log(JSON.stringify(summary, null, 2));
 
   if (results.some((result) => result.fatal)) {

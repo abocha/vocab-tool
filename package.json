@@ -11,11 +11,13 @@
     "prepare:packs": "node ./scripts/prepare-packs.js",
     "cards:draft": "node ./scripts/corpus-to-cards.js --level A2",
     "cards:smoke": "node ./scripts/corpus-to-cards.js --level A2 --tokens ./.codex-local/corpus/simplewiki/data/tokens.csv.gz --out ./cards/draft_cards.jsonl",
-    "cards:filter": "node ./scripts/corpus-to-cards.js --sfw on --dropProperNouns on",
+    "cards:filter": "node ./scripts/corpus-to-cards.js --sfwLevel default --dropProperNouns on",
+    "cards:filter:strict": "node ./scripts/corpus-to-cards.js --sfwLevel strict --dropProperNouns on --level A2",
     "packs:from-cards": "node ./scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
-    "packs:from-cards:safe": "node ./scripts/cards-to-packs.js --sfw on --dropProperNouns on --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
+    "packs:from-cards:safe": "node ./scripts/cards-to-packs.js --sfwLevel default --dropProperNouns on --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
+    "packs:from-cards:strict": "node ./scripts/cards-to-packs.js --sfwLevel strict --dropProperNouns on --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
     "packs:validate": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto",
-    "packs:validate:strict": "node ./scripts/packs-validate.js --strict --dir public/packs/A2 --type auto"
+    "packs:validate:strict": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto --sfwLevel strict --strict"
   },
   "dependencies": {
     "papaparse": "^5.5.3",

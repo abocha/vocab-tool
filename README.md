@@ -86,7 +86,7 @@ npm run packs:validate -- --dir public/packs/A2 --type auto
 - `cards/draft_cards.jsonl` stores one JSON object per line with the schema described in `/docs/06-cards-data-model.md`.
 - The pack builders keep the same column headers and shapes defined in `/docs/03-csv-pack-spec.md`, and every CSV export is written with a UTF-8 BOM so Excel opens them without mangling characters.
 - The validator CLI summarises totals, drops, and heuristic warnings per file; it exits non-zero only when a file is unreadable or missing required headers.
-- Filtering heuristics strip named entities, unsafe phrases, and short acronyms by default. Tweak the lists under `filter-lists/` or toggle behaviour with `--sfw`, `--dropProperNouns`, `--acronymMinLen`, and related flags.
+- Filtering heuristics strip named entities, unsafe phrases, short acronyms, formula stubs, and (optionally) sexual vocabulary. Tweak the lists under `filter-lists/` or toggle behaviour with `--sfwLevel`, `--sfwAllow`, `--dropProperNouns`, `--acronymMinLen`, and related flags.
 
 When iterating on the corpus heuristics, avoid renaming columns—the Pack Inspector and the React app expect the stable schemas shipped in Phase 1.
 
@@ -108,11 +108,39 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 - `npm run preview` — preview the production build locally.
 - `npm run prepare:packs` — copy/sample CSV packs (see above).
 - `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (examples, collocations, frequency metadata).
-- `npm run cards:filter` — regenerate cards with safety/proper-noun guards enabled.
+- `npm run cards:filter` — regenerate cards with the default safety filters.
+- `npm run cards:filter:strict` — regenerate cards with the school-safe profile.
 - `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards.
-- `npm run packs:from-cards:safe` — build packs with the same guards applied at exercise time.
+- `npm run packs:from-cards:safe` — build packs with the default guards.
+- `npm run packs:from-cards:strict` — build packs with the school-safe profile.
 - `npm run packs:validate` — run the pack validator summary over one or more levels.
-- `npm run packs:validate:strict` — validator with strict exit code if any guard flags trigger.
+- `npm run packs:validate:strict` — validator in school-safe mode with strict exit on guard hits.
+
+### SFW Profiles
+
+All build/validate CLIs accept `--sfwLevel` (or the legacy `--sfw` boolean) to control the guardrails:
+
+```bash
+# School-safe (sexual vocabulary removed unless allow-listed)
+node scripts/corpus-to-cards.js --level A2 --tokens ./.codex-local/corpus/simplewiki/data/tokens.csv.gz \
+  --out cards/draft_cards.jsonl --sfwLevel strict --dropProperNouns on
+
+node scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 \
+  --outDir public/packs/A2 --sfwLevel strict
+
+node scripts/packs-validate.js --dir public/packs/A2 --type auto --sfwLevel strict --strict
+
+# Mature / default filtering
+node scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --sfwLevel default
+
+# Disable SFW filtering entirely
+node scripts/corpus-to-cards.js --level A2 --sfwLevel off
+
+# Allow-list specific terms when running in strict mode
+node scripts/packs-validate.js --dir public/packs/A2 --sfwLevel strict --sfwAllow ./filter-lists/sfw-allow.txt
+```
+
+Lists live under `filter-lists/` and can be customised per team/project. The validator reports guard hits under the `filters` section; combine `--sfwLevel strict` with `--strict` to fail the build when any guarded terms remain.
 
 ## Deploying
 

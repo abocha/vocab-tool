@@ -16,6 +16,48 @@ const DEFAULT_BLOCKLIST = [
 
 const DEFAULT_ACRONYM_ALLOW = ["UK", "US", "EU", "UN", "USA", "NATO", "BBC", "NBA"];
 
+const DEFAULT_SFW_SEXUAL_ANATOMY = [
+  "penis",
+  "vagina",
+  "vulva",
+  "clitoris",
+  "breast",
+  "nipple",
+  "testicle",
+  "scrotum",
+  "semen",
+  "sperm",
+  "ejaculation",
+  "orgasm",
+  "erection",
+  "anal",
+  "oral sex",
+];
+
+const DEFAULT_SFW_SEXUAL_GENERAL = [
+  "sex",
+  "sexual",
+  "intercourse",
+  "porn",
+  "pornography",
+  "erotic",
+  "fetish",
+  "bdsm",
+  "xxx",
+  "masturbation",
+];
+
+const DEFAULT_SFW_SEXUAL_ORIENTATION = [
+  "homosexual",
+  "heterosexual",
+  "bisexual",
+  "asexual",
+  "pansexual",
+  "gay",
+  "lesbian",
+  "queer",
+];
+
 const DEFAULT_PROPER_CONTEXT = [
   "republic",
   "kingdom",
@@ -265,6 +307,42 @@ export async function loadListFile(filePath, defaults = []) {
   }
 }
 
+function compilePattern(term) {
+  if (!term) return null;
+  if (term.startsWith("re:")) {
+    const pattern = term.slice(3);
+    if (!pattern) return null;
+    return new RegExp(pattern, "i");
+  }
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i");
+}
+
+function compilePatternList(list) {
+  return list
+    .map((term) => compilePattern(term))
+    .filter((pattern) => pattern instanceof RegExp);
+}
+
+export function getSfwPatterns({ level = "default", baseList = [], anatomyList = [], generalList = [], orientationList = [], allowList = [] }) {
+  const normalizedLevel = level ? String(level).toLowerCase() : "default";
+  const patterns = [];
+  if (normalizedLevel === "default" || normalizedLevel === "strict") {
+    patterns.push(...compilePatternList(baseList));
+  }
+  if (normalizedLevel === "strict") {
+    patterns.push(...compilePatternList(anatomyList));
+    patterns.push(...compilePatternList(generalList));
+    patterns.push(...compilePatternList(orientationList));
+  }
+  const allowPatterns = compilePatternList(allowList);
+  return {
+    level: normalizedLevel,
+    patterns,
+    allowPatterns,
+  };
+}
+
 export async function buildFilterConfig({
   cwd = process.cwd(),
   blockListPath,
@@ -274,6 +352,11 @@ export async function buildFilterConfig({
   acronymMinLen = 3,
   dropProperNouns = true,
   sfw = true,
+  sfwLevel = "default",
+  sfwAllowPath,
+  sfwAnatomyPath,
+  sfwGeneralPath,
+  sfwOrientationPath,
 }) {
   const resolveMaybe = (maybePath, fallback) => {
     if (maybePath) return path.resolve(cwd, maybePath);
@@ -297,6 +380,36 @@ export async function buildFilterConfig({
     resolveMaybe(nationalitiesPath, "filter-lists/nationalities.txt"),
     DEFAULT_NATIONALITIES,
   );
+  const sexualAnatomy = await loadListFile(
+    resolveMaybe(sfwAnatomyPath, "filter-lists/sfw-sexual-anatomy.txt"),
+    DEFAULT_SFW_SEXUAL_ANATOMY,
+  );
+  const sexualGeneral = await loadListFile(
+    resolveMaybe(sfwGeneralPath, "filter-lists/sfw-sexual-general.txt"),
+    DEFAULT_SFW_SEXUAL_GENERAL,
+  );
+  const sexualOrientation = await loadListFile(
+    resolveMaybe(sfwOrientationPath, "filter-lists/sfw-sexual-orientation.txt"),
+    DEFAULT_SFW_SEXUAL_ORIENTATION,
+  );
+  const sfwAllowList = await loadListFile(resolveMaybe(sfwAllowPath, null), []);
+
+  let resolvedLevel = sfwLevel ? String(sfwLevel).toLowerCase() : "default";
+  if (![`off`, `default`, `strict`].includes(resolvedLevel)) {
+    resolvedLevel = "default";
+  }
+  if (!sfw && resolvedLevel === "default") {
+    resolvedLevel = "off";
+  }
+
+  const { patterns: sfwPatterns, allowPatterns: sfwAllowPatterns, level: effectiveLevel } = getSfwPatterns({
+    level: resolvedLevel,
+    baseList: blocklist,
+    anatomyList: sexualAnatomy,
+    generalList: sexualGeneral,
+    orientationList: sexualOrientation,
+    allowList: sfwAllowList,
+  });
 
   return {
     blocklist: blocklist.map((term) => term.toLowerCase()),
@@ -305,7 +418,10 @@ export async function buildFilterConfig({
     nationalities: new Set(nationalityList.map((term) => term.toLowerCase())),
     acronymMinLen: Number.isFinite(acronymMinLen) ? acronymMinLen : 3,
     dropProperNouns,
-    sfw,
+    sfw: effectiveLevel !== "off",
+    sfwLevel: effectiveLevel,
+    sfwPatterns,
+    sfwAllowPatterns,
   };
 }
 
@@ -359,11 +475,14 @@ export function isFormulaArtifact(value) {
   return /formula_\d+/i.test(value);
 }
 
-export function isUnsafe(text, blocklist = [], sfw = true) {
-  if (!sfw) return false;
+export function isUnsafe(text, patterns = [], allowPatterns = []) {
+  if (!patterns || patterns.length === 0) return false;
   if (!text) return false;
-  const lower = text.toLowerCase();
-  return blocklist.some((term) => lower.includes(term));
+  const normalized = String(text);
+  if (allowPatterns && allowPatterns.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+  return patterns.some((pattern) => pattern.test(normalized));
 }
 
 export function requiresCapitalization(entry) {
@@ -447,22 +566,31 @@ export function isProperNounLike({
   const isTitleCase = /^[A-Z][a-z'’\-]+$/.test(surfaceValue);
   const ordinal = isOrdinal(surfaceValue);
   const context = isProperContext(tokens, index, properSet, nationalitySet);
+  const entryProper = dominantProperNoun(entry);
+  const entryNeedsCapitalization = requiresCapitalization(entry);
+  const allowlist = config?.allowlist ?? new Set();
   if (!sentenceInitial && (isTitleCase || isAllCaps)) {
     return true;
   }
   if (ordinal && context) {
     return true;
   }
-  if (isAllCaps && !config.allowlist?.has(surfaceValue)) {
+  if (isAllCaps && !allowlist.has(surfaceValue)) {
     return true;
   }
-  if (context && (isTitleCase || ordinal || isAllCaps)) {
+  const isLower = surfaceValue === surfaceValue.toLowerCase();
+  const allowLowercaseContext =
+    isLower &&
+    !ordinal &&
+    !isAcronym(surfaceValue, config.acronymMinLen, allowlist) &&
+    !entryProper;
+  if (!allowLowercaseContext && context && (isTitleCase || ordinal || isAllCaps)) {
     return true;
   }
-  if (dominantProperNoun(entry)) {
+  if (entryProper) {
     return true;
   }
-  if (requiresCapitalization(entry)) {
+  if (!allowLowercaseContext && entryNeedsCapitalization) {
     return true;
   }
   return false;
