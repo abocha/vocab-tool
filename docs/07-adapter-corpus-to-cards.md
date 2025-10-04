@@ -13,6 +13,12 @@
 4. Compute/store `freq_zipf` (approximate via `wordfreq`).
 5. Save as `cards/draft_cards.jsonl` (one JSON per line).
 
+## Selection & Cleaning
+
+- Generate `collocations` with anchor preference (verbs, fixed preps).
+- Mark `avoid_as_blank` for proper nouns, numbers, dates, and ambiguous tokens.
+- Keep 1–3 level-appropriate example sentences per lemma.
+
 ## Quality Gates
 
 - Sentence length bounds; remove proper nouns; dedupe near-duplicates.

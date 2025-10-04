@@ -8,11 +8,20 @@
 "pos": "VERB",
 "freq_zipf": 4.3,
 "examples": ["They maintain the equipment regularly."],
-"collocations": { "NOUN": ["equipment","relationship","contact"] },
+"collocations": [
+  { "anchor": "maintain", "partner": "equipment", "score": 5.1 },
+  { "anchor": "maintain", "partner": "relationship", "score": 4.7 }
+],
 "distractors": [],
 "source": "simplewiki",
 "license": "CC BY-SA"
 }
+
+### Additional Fields (optional, backward-compatible)
+
+- `collocations`: array of {anchor: string, partner: string, score: number} (derive POS -> list maps at read time if needed)
+- `freq_zipf`: number (existing, used for level gating)
+- `flags`: { avoid_as_blank?: boolean, polysemy?: boolean }
 
 ## Principles
 

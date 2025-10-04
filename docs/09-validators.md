@@ -14,6 +14,18 @@ Cheap heuristics to flag low-quality items and protect the learner experience.
 - **Toxicity/basic safety**: banned list; skip sensitive topics.
 - **Attribution presence**: `source` and `license` non-empty.
 
+### Gap-Fill Specific
+
+- Bank validity: all options share required POS/morph; distractors not identical to answer.
+- Banned blanks: reject rows where the blank token has avoid_as_blank, is a proper noun/number/date, or falls outside Zipf band for the chosen difficulty (unless grammar mode).
+- Collocation sanity: if gap_mode=collocation, ensure the partner token appears in the sentence.
+
+### Sampling QA
+
+- Offline sample (N≈200–500) to track estimated first-try success:
+  - A1/A2 word-bank: 60–80% first-try
+  - A2 open cloze: 30–50%
+
 ## Outputs
 
 - Flag items with `needs_review: true` (or exclude from packs).

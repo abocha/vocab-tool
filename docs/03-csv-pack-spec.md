@@ -14,8 +14,25 @@
 
 - **File:** `gapfill.csv`
 - **Columns:**  
-  `level, type(gapfill), prompt, answer, source, license`
+  `level, type(gapfill), prompt, answer|answers, source, license`
 - **Notes:** `prompt` contains a single blank `_____`.
+
+#### Gap-fill (extended, backward-compatible)
+
+Required: `type=gapfill`, `prompt`, `answers`, `source`, `license` (legacy packs may supply `answer`; continue to accept, but prefer plural `answers`).
+
+Optional (ignored by older readers):
+
+- `gap_mode` one of: `target|collocation|grammar`
+- `bank` pipe-separated options, e.g. `in|on|at`
+- `hints` semi-colon list, e.g. `pos=verb;first=t;cue=a shower`
+
+**Notes**
+
+- Unknown columns must be ignored by readers.
+- `answers` supports multi-blank with grouped pipes when needed (see Builders).
+
+*Matching remains one pair per row; legacy set-per-row stays deprecated.*
 
 ### 2) Matching
 

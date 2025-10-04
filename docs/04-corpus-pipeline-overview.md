@@ -11,6 +11,16 @@
 - `~/corpus/simplewiki/data/tokens.csv[.gz]`, `freq_lemmas.csv`, `bigrams.csv`, `trigrams.csv`.
 - `~/corpus/simplewiki/packs/<LEVEL>/{gapfill.csv,matching.csv,mcq.csv,scramble.csv}`.
 
+### Collocation Signals for Builders
+
+- Compute bigram stats (e.g., PMI, LLR) and store top collocation anchors at card-time.
+- Expose anchors (verbs/prepositions) to the Gap Strategy Engine for predictable blanks.
+
+### Blank Safety Gates
+
+- Exclude proper nouns, numbers/dates, ultra-rare tokens by default.
+- Allow stopwords only when a grammar preset explicitly targets them (articles, prepositions, auxiliaries).
+
 ## Guarantees
 
 - Streaming + progress bars (tqdm).

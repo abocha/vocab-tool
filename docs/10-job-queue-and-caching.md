@@ -16,6 +16,7 @@ Run batch jobs (enrichments, media builds) predictably and cheaply.
 
 - Key = `sha256(model_id + prompt_template_version + seed_payload_json)`.
 - If key exists → reuse cached result.
+- Cache keys include model+template+payload SHA for any optional LLM step (e.g., rating distractor plausibility). Falls back to non-LLM path if cache miss and budgets disabled.
 
 ## Execution Model
 

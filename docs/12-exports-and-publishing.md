@@ -7,7 +7,7 @@
 ## Exports
 
 - CSV subset export from Pack Inspector (client-side download).
-- Printable HTML view with answer key (no PDF dependency at MVP).
+- Printable HTML: show word-bank and selected hints when enabled; answer key togglable. Student link mirrors the same configuration deterministically, no PDF dependency required.
 
 ## Static Publishing
 

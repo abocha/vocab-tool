@@ -34,3 +34,18 @@
 - App runs with sample packs; switching level/type does not reload the page.
 - Progress persists across refresh; Reset clears state.
 - CSV errors do not crash UI; show a helpful message.
+
+## MVP Components
+
+### Gap-Fill Enhancements (MVP+)
+
+- **Gap Mode:** target-lexis | collocation | grammar-slot
+- **Word-bank (default A1/A2):** bank size 4-8, rule-aware distractors
+- **Hints:** initial letter, POS, collocation cue, optional TTS
+- **Difficulty presets:** A1/A2/B1 (sets Zipf band, bank size, hints)
+- **Determinism:** all choices seeded; same inputs -> same outputs
+
+## State/Params
+
+- Inspector presets persisted (filters + seed + pairs-per-set + gap mode + bank size + hints).
+- `?seed=` continues to control grouping and gap selection deterministically.

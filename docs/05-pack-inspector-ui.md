@@ -11,6 +11,22 @@ Provide a lightweight review layer inside the app to curate packs for a session.
 - Quick filters: length range, contains word, regex (optional).
 - Export: save filtered subset to CSV (client-side download).
 
+## Controls
+
+### Gap-Fill Controls
+
+- Gap Mode: select target-lexis / collocation / grammar-slot
+- Bank Size: 4-8 (default by difficulty)
+- Hints: checkboxes [initial letter] [POS] [collocation cue] [TTS]
+- Difficulty: A1 / A2 / B1 (sets Zipf band + defaults)
+- Max blanks per sentence: 1-2
+
+## Presets
+
+- Presets capture: filters, seed, pairs-per-set, gap controls (mode, bank size, hints, difficulty).
+- One-click "Duplicate with new seed" for homework variants.
+- Preset library will surface common grammar/vocab targets for quick start (Phase 2).
+
 ## Non-Goals
 
 - Editing the underlying CSV on disk.
