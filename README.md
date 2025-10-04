@@ -89,9 +89,9 @@ When iterating on the corpus heuristics, avoid renaming columns—the Pack Inspe
 
 Open the “Pack Inspector” panel below the exercise view to curate the currently loaded level + exercise:
 
-- Filter by substring and length range, hide/restore individual items, and see live counts (parsed → filtered → displayed). Filters + hidden IDs persist per `(level, type)` in `localStorage` for quick revisits.
+- Filter by substring, optional regex, and length range; hide/restore individual items; and see live counts (parsed → filtered → displayed). Filters + hidden IDs persist per `(level, type)` in `localStorage` for quick revisits.
 - Toggle Shuffle, Max Items, and (for matching packs) the numeric “Pairs per Set” control (2–12). The value persists to `matching.setSize` unless a `?set` query parameter is present.
-- Export the curated subset to CSV directly in the browser. Files are named like `matching.curated.A2.20250304-1030.csv`, include a UTF-8 BOM for Excel compatibility, and preserve the canonical schemas (matching exports are pair-per-row).
+- Export the curated subset to CSV or printable HTML directly in the browser. CSV files (e.g. `matching.curated.A2.20250304-1030.csv`) include a UTF-8 BOM for Excel, while HTML exports render exercises plus an answer key with safe escaping for sharing or printing.
 - Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card. Enable “Show info notices” and “Show detailed warnings” to reveal optional metadata notes and up to five concrete examples per issue type.
 
 The top-of-page banner also surfaces parse warnings and errors (missing columns, skipped rows, empty files) so malformed packs never crash the app—the UI simply falls back to a friendly empty state.
@@ -112,6 +112,7 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 - `npm run packs:validate` — run the pack validator summary over one or more levels.
 - `npm run packs:validate:strict` — validator in school-safe mode with strict exit on guard hits.
 - `npm run packs:convert:matching` — convert a legacy set-per-row matching CSV into the canonical pair-per-row format.
+- `npm run test` — run the Vitest unit suites (single-threaded pool).
 
 ### SFW Profiles
 

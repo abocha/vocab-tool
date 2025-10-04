@@ -7,6 +7,7 @@ import type {
   ProgressEntry,
   ProgressMap,
 } from "../types";
+import { MAX_REGEX_PATTERN_LENGTH } from "./inspector";
 
 const STORAGE_PREFIX = "esl-vocab-mvp";
 const SETTINGS_KEY = `${STORAGE_PREFIX}/settings`;
@@ -25,6 +26,7 @@ const DEFAULT_INSPECTOR_FILTERS: InspectorFilters = {
   contains: "",
   minLength: null,
   maxLength: null,
+  regex: "",
 };
 
 function isBrowser(): boolean {
@@ -161,7 +163,12 @@ function sanitizeFilters(filters: InspectorFilters): InspectorFilters {
     contains: typeof filters.contains === "string" ? filters.contains : "",
     minLength: null,
     maxLength: null,
+    regex: typeof filters.regex === "string" ? filters.regex : "",
   };
+
+  if (normalized.regex.length > MAX_REGEX_PATTERN_LENGTH) {
+    normalized.regex = normalized.regex.slice(0, MAX_REGEX_PATTERN_LENGTH);
+  }
 
   if (typeof filters.minLength === "number" && Number.isFinite(filters.minLength) && filters.minLength >= 0) {
     normalized.minLength = filters.minLength;

@@ -66,6 +66,7 @@ export interface InspectorFilters {
   contains: string;
   minLength: number | null;
   maxLength: number | null;
+  regex: string;
 }
 
 export interface InspectorStateSnapshot {

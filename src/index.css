@@ -545,6 +545,28 @@ button:focus-visible {
   font-size: 0.9rem;
 }
 
+.pack-inspector__label-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+}
+
+.pack-inspector__help-icon {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 9999px;
+  background-color: #e2e8f0;
+  color: #0f172a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: help;
+  border: 1px solid #cbd5e1;
+}
+
 .pack-inspector__control-actions {
   margin-top: 0.75rem;
   display: flex;

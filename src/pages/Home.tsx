@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { loadExercises, type MatchingDiagnostics, type PackIssue } from "../lib/csv";
-import { applyInspectorFilters } from "../lib/inspector";
+import { applyInspectorFilters, compileInspectorRegex } from "../lib/inspector";
 import {
   clampSetSize,
   DEFAULT_MATCHING_SET_SIZE,
@@ -110,6 +110,11 @@ export function Home() {
   const urlSetSizeRef = useRef<number | null>(null);
   const urlSeedRef = useRef<string | null>(null);
   const inspectorHydratedRef = useRef(false);
+  const deferredRegex = useDeferredValue(inspectorFilters.regex);
+  const { regex: compiledRegex, error: compiledRegexError } = useMemo(
+    () => compileInspectorRegex(deferredRegex),
+    [deferredRegex],
+  );
 
   useEffect(() => {
     setSettings(loadSettings());
@@ -266,8 +271,8 @@ export function Home() {
   }, [packFingerprint, settings.level, settings.exerciseType]);
 
   const filteredItems = useMemo(
-    () => applyInspectorFilters(items, inspectorFilters, hiddenItemIds),
-    [items, inspectorFilters, hiddenItemIds],
+    () => applyInspectorFilters(items, inspectorFilters, hiddenItemIds, { regex: compiledRegex }),
+    [items, inspectorFilters, hiddenItemIds, compiledRegex],
   );
 
   const preparedItems = useMemo(() => {
@@ -595,6 +600,7 @@ export function Home() {
         exerciseType={settings.exerciseType}
         rowCount={rowCount}
         matchingDiagnostics={matchingDiagnostics}
+        regexError={compiledRegexError}
       />
       <Footer />
     </div>

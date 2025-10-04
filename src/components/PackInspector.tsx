@@ -8,7 +8,13 @@ import type {
 } from "../types";
 import type { MatchingDiagnostics, PackIssue } from "../lib/csv";
 import { MAX_ITEMS_CHOICES } from "../lib/constants";
-import { buildCsvExport, itemLength, itemToPlainText } from "../lib/inspector";
+import {
+  buildCsvExport,
+  buildHtmlExport,
+  itemLength,
+  itemToPlainText,
+  MAX_REGEX_PATTERN_LENGTH,
+} from "../lib/inspector";
 
 const TYPE_LABELS: Record<ExerciseType, string> = {
   gapfill: "Gap Fill",
@@ -58,6 +64,7 @@ interface PackInspectorProps {
   exerciseType: ExerciseType;
   rowCount: number;
   matchingDiagnostics?: MatchingDiagnostics | null;
+  regexError?: string | null;
 }
 
 function formatItemSummary(item: ExerciseItem): string {
@@ -80,6 +87,21 @@ function downloadCsv(data: { csv: string; filename: string }) {
     return;
   }
   const blob = new Blob([data.csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", data.filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
+function downloadHtml(data: { html: string; filename: string }) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const blob = new Blob([data.html], { type: "text/html;charset=utf-8;" });
   const url = window.URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -113,6 +135,7 @@ export function PackInspector({
   exerciseType,
   rowCount,
   matchingDiagnostics,
+  regexError,
 }: PackInspectorProps) {
 
   const hiddenItems = useMemo(
@@ -188,6 +211,14 @@ export function PackInspector({
       return;
     }
     downloadCsv(exportData);
+  };
+
+  const handleHtmlExport = () => {
+    const exportData = buildHtmlExport(visibleItems, exerciseType, level);
+    if (!exportData) {
+      return;
+    }
+    downloadHtml(exportData);
   };
 
   const filteredCount = filteredItems.length;
@@ -325,10 +356,36 @@ export function PackInspector({
                     }}
                   />
                 </label>
+                <label>
+                  <span className="pack-inspector__label-text">
+                    Regex (optional)
+                    <span
+                      className="pack-inspector__help-icon"
+                      title="Optional JavaScript regular expression. Examples: ^start (anchored), end$ (suffix), (cat|dog) (alternation), \\d{2,} (numbers). Leave blank to disable."
+                      aria-label="Regex help: uses JavaScript syntax. Examples include ^start, end$, (cat|dog), \\d{2,}."
+                    >
+                      ?
+                    </span>
+                  </span>
+                  <input
+                    type="text"
+                    value={filters.regex}
+                    maxLength={MAX_REGEX_PATTERN_LENGTH}
+                    aria-invalid={Boolean(regexError)}
+                    onChange={(event) => {
+                      handleFilterChange("regex", event.target.value);
+                    }}
+                  />
+                </label>
               </div>
               {invalidRange && (
                 <p className="pack-inspector__hint" role="alert">
                   Min length is greater than max length. Adjust the range to see results.
+                </p>
+              )}
+              {filters.regex.trim() !== "" && regexError && (
+                <p className="pack-inspector__hint" role="alert">
+                  Regex issue: {regexError}
                 </p>
               )}
               <div className="pack-inspector__control-actions">
@@ -380,6 +437,9 @@ export function PackInspector({
               <div className="pack-inspector__control-actions">
                 <button type="button" onClick={handleExport} disabled={visibleItems.length === 0}>
                   Export CSV
+                </button>
+                <button type="button" onClick={handleHtmlExport} disabled={visibleItems.length === 0}>
+                  Export HTML
                 </button>
               </div>
             </fieldset>

@@ -327,6 +327,8 @@ function buildMatchingPairs(
   return { pairs, diagnostics, shape };
 }
 
+export { buildMatchingPairs as __buildMatchingPairsForTest };
+
 function matchingDiagnosticsToIssues(diagnostics: MatchingDiagnostics): PackIssue[] {
   const issues: PackIssue[] = [];
 
