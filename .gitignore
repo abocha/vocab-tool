@@ -29,5 +29,6 @@ dist-ssr
 # Real/large packs — only keep tiny samples in git
 public/packs/**
 !public/packs/*/sample-*.csv
-cards/draft_cards.jsonl
-public/packs/A2/scramble.csv
+
+# card drafts
+cards/
