@@ -1686,6 +1686,7 @@ function buildScrambleRows({ cards, level, limit, filterConfig }) {
   const stats = {
     emitted: 0,
     skippedShort: 0,
+    skippedNumeric: 0,
     filteredByGuards: 0,
     droppedDuplicate: 0,
   };
@@ -1704,6 +1705,11 @@ function buildScrambleRows({ cards, level, limit, filterConfig }) {
       const trimmed = sentence.trim();
       if (trimmed.length < GAPFILL_MIN_LENGTH) {
         stats.skippedShort += 1;
+        continue;
+      }
+      if (/\d/.test(trimmed)) {
+        stats.skippedNumeric += 1;
+        recordDrop(dropSummary, "numeric", trimmed.slice(0, 160));
         continue;
       }
       const unsafe = checkUnsafeText(trimmed, filterConfig, dropSummary);

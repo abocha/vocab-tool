@@ -17,6 +17,7 @@
 
 ## Validators
 - [ ] Expand `scripts/packs-validate.js` to cover the watchdog checks in `docs/09-validators.md` (POS consistency, morphology, MinHash duplicates, bank validity, gap-mode sanity, toxicity guards, Zipf band enforcement, sampling QA summaries, etc.) and surface failures in inspector diagnostics.
+- [x] Add bank telemetry (source-tag counts, relaxed usage) to the validator summary so we can monitor regressions across levels.
 
 ## Exports & Publishing
 - [x] Enhance export builders (`src/lib/inspector.ts`) so printable HTML honors the “selected hints” and answer-key toggles described in `docs/12-exports-and-publishing.md`.
@@ -24,5 +25,10 @@
 ## Types, Tests, & QA
 - [x] Update shared types (`src/types.ts`) and storage schemas to reflect new data fields (cards, exercises, presets, hints, banks, gap modes).
 - [x] Add/extend tests (Vitest + CLI smoke tests) that cover the new inspector workflows, CSV parsing branches, builders, and validators to lock the documented behaviour.
+
+## Release Targets (current sprint)
+- [x] Expand `collocationFamilies` / curated pools to cut `bankTooSmall` counts below 50 for A2 and B1 packs (now 16 / 24).
+- [ ] Spot-check relaxed-tagged banks and capture keep/drop decisions so docs can cite QA thresholds.
+- [ ] Evaluate scramble numeric filter on B2 once packs exist; decide whether to redact or skip number-heavy sentences in higher levels.
 
 Track each item with linked issues/PRs as implementation progresses to keep docs and code in sync.

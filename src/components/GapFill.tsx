@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BankQuality, GapFillInspectorControls, GapFillItem } from "../types";
 import { isTextMatch } from "../lib/normalize";
+import { deterministicShuffle } from "../lib/shuffle";
 
 interface GapFillProps {
   item: GapFillItem;
@@ -44,16 +45,43 @@ export function GapFill({ item, onResult, onNext, existingResult, controls }: Ga
   const bankTags = useMemo(() => item.bankMeta?.tags ?? [], [item.bankMeta?.tags]);
   const slotLabel = useMemo(() => item.bankMeta?.slot ?? null, [item.bankMeta?.slot]);
 
-  const wordBank = useMemo(() => {
+  const shuffledBank = useMemo(() => {
     if (!item.bank || item.bank.length === 0) {
       return [] as string[];
     }
+    return deterministicShuffle(item.bank, `${item.id}:bank`);
+  }, [item.bank, item.id]);
+
+  const wordBank = useMemo(() => {
+    if (shuffledBank.length === 0) {
+      return [] as string[];
+    }
     if (!controls) {
-      return item.bank;
+      const ensured = [...shuffledBank];
+      const primaryAnswer = acceptableAnswers[0] ?? item.answer;
+      const hasAnswer = ensured.some((option) => isTextMatch(option, primaryAnswer));
+      if (!hasAnswer) {
+        const originalAnswer = item.bank?.find((option) => isTextMatch(option, primaryAnswer)) ?? primaryAnswer;
+        ensured.push(originalAnswer);
+      }
+      return deterministicShuffle(ensured, `${item.id}:bank:view`);
     }
     const maxItems = Math.max(1, controls.bankSize);
-    return item.bank.slice(0, Math.min(maxItems, item.bank.length));
-  }, [item.bank, controls]);
+    let selected = shuffledBank.slice(0, Math.min(maxItems, shuffledBank.length));
+    const primaryAnswer = acceptableAnswers[0] ?? item.answer;
+    const hasAnswer = selected.some((option) => isTextMatch(option, primaryAnswer));
+    if (!hasAnswer) {
+      const sourceAnswer = shuffledBank.find((option) => isTextMatch(option, primaryAnswer)) ?? primaryAnswer;
+      if (selected.length < maxItems) {
+        selected = [...selected, sourceAnswer];
+      } else if (selected.length > 0) {
+        selected = [...selected.slice(0, selected.length - 1), sourceAnswer];
+      } else {
+        selected = [sourceAnswer];
+      }
+    }
+    return deterministicShuffle(selected, `${item.id}:bank:view`);
+  }, [acceptableAnswers, controls, item.answer, item.bank, item.id, shuffledBank]);
 
   const hintsData = item.hints ?? {};
 

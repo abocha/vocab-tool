@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { createHash } from "../lib/id";
+import { deterministicShuffle } from "../lib/shuffle";
 import type { MatchingItem } from "../types";
 
 interface MatchingProps {
@@ -10,24 +10,6 @@ interface MatchingProps {
 }
 
 type PairResult = "correct" | "incorrect" | null;
-
-function hashToNumber(seed: string): number {
-  const hex = createHash(seed);
-  return Number.parseInt(hex.slice(0, 8), 16);
-}
-
-function getDeterministicOrder(length: number, seed: string): number[] {
-  return Array.from({ length }, (_, index) => index).sort((a, b) => {
-    const hashA = hashToNumber(`${seed}:${a}`);
-    const hashB = hashToNumber(`${seed}:${b}`);
-    return hashA - hashB;
-  });
-}
-
-function deterministicShuffle<T>(values: T[], seed: string): T[] {
-  const order = getDeterministicOrder(values.length, seed);
-  return order.map((index) => values[index]);
-}
 
 export function Matching({ item, onResult, onNext, existingResult }: MatchingProps) {
   const limitedPairs = item.pairs;

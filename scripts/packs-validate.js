@@ -170,6 +170,34 @@ function parsePipeList(value) {
     .filter((part) => part.length > 0);
 }
 
+function mapToObject(map, { numeric = false } = {}) {
+  if (!(map instanceof Map)) {
+    return {};
+  }
+  const entries = Array.from(map.entries());
+  const sorted = numeric
+    ? entries.sort((a, b) => Number(a[0]) - Number(b[0]))
+    : entries.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const result = {};
+  for (const [key, value] of sorted) {
+    result[String(key)] = value;
+  }
+  return result;
+}
+
+function serializeTelemetry(telemetry) {
+  if (!telemetry) {
+    return null;
+  }
+  return {
+    banks: telemetry.banks ?? 0,
+    relaxed: telemetry.relaxed ?? 0,
+    untagged: telemetry.untagged ?? 0,
+    tagCounts: mapToObject(telemetry.tagCounts, { numeric: false }),
+    sizeBuckets: mapToObject(telemetry.sizeBuckets, { numeric: true }),
+  };
+}
+
 function buildCsvParser() {
   return {
     parseLine(line) {
@@ -236,6 +264,13 @@ function createGapfillState() {
       bankMorph: 0,
     },
     seen: new Set(),
+    telemetry: {
+      banks: 0,
+      relaxed: 0,
+      tagCounts: new Map(),
+      sizeBuckets: new Map(),
+      untagged: 0,
+    },
   };
 }
 
@@ -248,14 +283,19 @@ function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
   const answer = answers[0] ?? "";
   const bankMetaRaw = safeString(row.bank_meta ?? row["bank_meta"] ?? row["bankMeta"]);
   let bankMetaSlot = "";
+  let bankMeta = null;
   if (bankMetaRaw) {
     try {
       const parsed = JSON.parse(bankMetaRaw);
-      if (parsed && typeof parsed === "object" && typeof parsed.slot === "string") {
-        bankMetaSlot = parsed.slot;
+      if (parsed && typeof parsed === "object") {
+        bankMeta = parsed;
+        if (typeof parsed.slot === "string") {
+          bankMetaSlot = parsed.slot;
+        }
       }
     } catch (error) {
       // ignore malformed metadata
+      bankMeta = null;
     }
   }
   if (!prompt || !answer) {
@@ -352,6 +392,25 @@ function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
         recordDrop(filterSummary, "bankMorph", bankOptions.join(" | "));
         return;
       }
+    }
+  }
+
+  const telemetry = state.telemetry;
+  if (telemetry) {
+    telemetry.banks += 1;
+    const sizeKey = String(bankOptions.length);
+    telemetry.sizeBuckets.set(sizeKey, (telemetry.sizeBuckets.get(sizeKey) ?? 0) + 1);
+    const tags = Array.isArray(bankMeta?.tags) ? bankMeta.tags : null;
+    if (tags && tags.length > 0) {
+      tags.forEach((tag) => {
+        if (!tag) return;
+        telemetry.tagCounts.set(tag, (telemetry.tagCounts.get(tag) ?? 0) + 1);
+      });
+    } else {
+      telemetry.untagged += 1;
+    }
+    if (bankMeta && bankMeta.usedRelax === true) {
+      telemetry.relaxed += 1;
     }
   }
 
@@ -665,6 +724,7 @@ async function analyzeFile({ filePath, type }, filterConfig) {
       kept: gapfillState.kept,
       drops: gapfillState.drops,
       filterSummary,
+      telemetry: serializeTelemetry(gapfillState.telemetry),
     };
   }
 
@@ -720,7 +780,7 @@ async function collectFiles({ packs, dir }) {
   return { files };
 }
 
-function formatSummary(results, combinedFilters) {
+function formatSummary(results, combinedFilters, aggregatedTelemetry) {
   const summary = results.map((result) => ({
     file: path.relative(process.cwd(), result.filePath),
     type: result.type,
@@ -736,11 +796,13 @@ function formatSummary(results, combinedFilters) {
     skipped: result.skipped ?? null,
     error: result.error ?? null,
     filters: result.filters ?? buildSummaryFragment(result.filterSummary ?? {}),
+    telemetry: result.telemetry ?? null,
   }));
   return {
     task: "packs-validate",
     files: summary,
     filters: buildSummaryFragment(combinedFilters),
+    bankTelemetry: aggregatedTelemetry ?? null,
   };
 }
 
@@ -810,6 +872,13 @@ async function main() {
 
   const results = [];
   const combinedFilterSummary = {};
+  const aggregatedTelemetry = {
+    banks: 0,
+    relaxed: 0,
+    untagged: 0,
+    tagCounts: new Map(),
+    sizeBuckets: new Map(),
+  };
   for (const filePath of fileList) {
     const inferred = inferType(filePath);
     if (forcedType && !singlePackMode && inferred && inferred !== forcedType) {
@@ -833,10 +902,33 @@ async function main() {
       analysis.filters = buildSummaryFragment(analysis.filterSummary);
       mergeDropSummaries(combinedFilterSummary, analysis.filterSummary);
     }
+    if (analysis.telemetry) {
+      aggregatedTelemetry.banks += analysis.telemetry.banks ?? 0;
+      aggregatedTelemetry.relaxed += analysis.telemetry.relaxed ?? 0;
+      aggregatedTelemetry.untagged += analysis.telemetry.untagged ?? 0;
+      const tagCounts = analysis.telemetry.tagCounts ?? {};
+      for (const [tag, count] of Object.entries(tagCounts)) {
+        aggregatedTelemetry.tagCounts.set(tag, (aggregatedTelemetry.tagCounts.get(tag) ?? 0) + (count ?? 0));
+      }
+      const sizeBuckets = analysis.telemetry.sizeBuckets ?? {};
+      for (const [bucket, count] of Object.entries(sizeBuckets)) {
+        aggregatedTelemetry.sizeBuckets.set(bucket, (aggregatedTelemetry.sizeBuckets.get(bucket) ?? 0) + (count ?? 0));
+      }
+    }
     results.push(analysis);
   }
 
-  const summary = formatSummary(results, combinedFilterSummary);
+  const aggregatedPlain = aggregatedTelemetry.banks > 0
+    ? {
+        banks: aggregatedTelemetry.banks,
+        relaxed: aggregatedTelemetry.relaxed,
+        untagged: aggregatedTelemetry.untagged,
+        tagCounts: mapToObject(aggregatedTelemetry.tagCounts, { numeric: false }),
+        sizeBuckets: mapToObject(aggregatedTelemetry.sizeBuckets, { numeric: true }),
+      }
+    : null;
+
+  const summary = formatSummary(results, combinedFilterSummary, aggregatedPlain);
   summary.sfwLevel = filterConfig.sfwLevel;
   console.log(JSON.stringify(summary, null, 2));
 
