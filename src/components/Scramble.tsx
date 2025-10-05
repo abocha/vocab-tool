@@ -60,6 +60,9 @@ export function Scramble({ item, onResult, onNext, existingResult }: ScramblePro
         <button type="button" onClick={handleCheck} disabled={answer.trim().length === 0}>
           Check
         </button>
+        <button type="button" onClick={onNext}>
+          Skip
+        </button>
         <button type="button" onClick={onNext} disabled={!checked}>
           Next →
         </button>

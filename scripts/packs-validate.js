@@ -17,8 +17,43 @@ import {
 
 const GAPFILL_MIN_LENGTH = 40;
 const GAPFILL_MAX_LENGTH = 120;
+const GAPFILL_BANK_MIN = 4;
+const MIN_BANK_BY_LEVEL = {
+  A1: 4,
+  A2: 5,
+  B1: 6,
+  B2: 6,
+};
+const MAX_BLANKS_BY_LEVEL = {
+  A1: 1,
+  A2: 1,
+  B1: 2,
+  B2: 2,
+};
+const STOPWORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "with",
+  "at",
+  "on",
+  "in",
+  "of",
+  "from",
+  "by",
+  "about",
+  "into",
+  "over",
+  "under",
+  "between",
+  "and",
+  "or",
+  "but",
+]);
 const REQUIRED_HEADERS = {
-  gapfill: ["level", "type", "prompt", "answer", "source", "license"],
+  gapfill: ["level", "type", "prompt", "source", "license"],
   matching: ["level", "type", "left", "right", "source", "license"],
   mcq: ["type", "prompt", "options", "answer", "source", "license"],
 };
@@ -194,6 +229,11 @@ function createGapfillState() {
       long: 0,
       duplicate: 0,
       attribution: 0,
+      bankTooSmall: 0,
+      bankMissingAnswer: 0,
+      bankDuplicate: 0,
+      bankStopword: 0,
+      bankMorph: 0,
     },
     seen: new Set(),
   };
@@ -202,13 +242,32 @@ function createGapfillState() {
 function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
   state.total += 1;
   const prompt = safeString(row.prompt ?? row["prompt"]);
-  const answer = safeString(row.answer ?? row["answer"]);
+  const answersRaw = safeString(row.answers ?? row["answers"]);
+  const legacyAnswer = safeString(row.answer ?? row["answer"]);
+  const answers = answersRaw ? parsePipeList(answersRaw) : legacyAnswer ? [legacyAnswer] : [];
+  const answer = answers[0] ?? "";
+  const bankMetaRaw = safeString(row.bank_meta ?? row["bank_meta"] ?? row["bankMeta"]);
+  let bankMetaSlot = "";
+  if (bankMetaRaw) {
+    try {
+      const parsed = JSON.parse(bankMetaRaw);
+      if (parsed && typeof parsed === "object" && typeof parsed.slot === "string") {
+        bankMetaSlot = parsed.slot;
+      }
+    } catch (error) {
+      // ignore malformed metadata
+    }
+  }
   if (!prompt || !answer) {
     state.drops.missing += 1;
     return;
   }
+  const bankRaw = safeString(row.bank ?? row["bank"]);
+  const bankOptions = parsePipeList(bankRaw);
   const blankMatches = prompt.match(/_____/g) ?? [];
-  if (blankMatches.length !== 1) {
+  const level = safeString(row.level ?? row["level"]).toUpperCase();
+  const maxBlanksAllowed = MAX_BLANKS_BY_LEVEL[level] ?? 2;
+  if (blankMatches.length === 0 || blankMatches.length > maxBlanksAllowed) {
     state.drops.blankCount += 1;
     return;
   }
@@ -231,6 +290,70 @@ function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
     return;
   }
   state.seen.add(key);
+  const minBank = MIN_BANK_BY_LEVEL[level] ?? GAPFILL_BANK_MIN;
+  if (bankOptions.length > 0) {
+    if (bankOptions.length < minBank) {
+      state.drops.bankTooSmall += 1;
+      recordDrop(filterSummary, "bankTooSmall", bankOptions.join(" | "));
+    }
+    const normalizedAnswer = normalizeText(answer);
+    const hasAnswer = bankOptions.some((option) => normalizeText(option) === normalizedAnswer);
+    if (!hasAnswer) {
+      state.drops.bankMissingAnswer += 1;
+      recordDrop(filterSummary, "bankMissingAnswer", bankOptions.join(" | "));
+    }
+
+    const normalizedBank = bankOptions.map((option) => normalizeText(option));
+    const uniqueBank = new Set(normalizedBank);
+    if (uniqueBank.size !== normalizedBank.length) {
+      state.drops.bankDuplicate += 1;
+      recordDrop(filterSummary, "bankDuplicate", bankOptions.join(" | "));
+      return;
+    }
+
+    const gapModeRaw = safeString(row["gap_mode"] ?? row["gapMode"]).toLowerCase();
+    const gapMode = gapModeRaw === "grammar" ? "grammar" : gapModeRaw === "collocation" ? "collocation" : "target";
+
+    if (gapMode !== "grammar") {
+      const stopwordHit = bankOptions.some((option) => STOPWORDS.has(option.toLowerCase()));
+      if (stopwordHit) {
+        state.drops.bankStopword += 1;
+        recordDrop(filterSummary, "bankStopword", bankOptions.join(" | "));
+        return;
+      }
+    }
+
+    const answerLower = answer.toLowerCase();
+    let enforceSuffix = "";
+    if (bankMetaSlot) {
+      const parts = bankMetaSlot.split("|");
+      const slotPos = (parts[0] ?? "").toUpperCase();
+      const slotMorph = (parts[1] ?? "").toLowerCase();
+      if (slotPos === "VERB" && ["ing", "ed", "s"].includes(slotMorph)) {
+        enforceSuffix = slotMorph;
+      }
+    }
+    if (!enforceSuffix) {
+      const needsMorphCheck =
+        answerLower.endsWith("ing") ||
+        answerLower.endsWith("ed") ||
+        (answerLower.endsWith("s") && !answerLower.endsWith("ss"));
+      if (needsMorphCheck && !bankMetaSlot) {
+        if (answerLower.endsWith("ing")) enforceSuffix = "ing";
+        else if (answerLower.endsWith("ed")) enforceSuffix = "ed";
+        else enforceSuffix = "s";
+      }
+    }
+
+    if (enforceSuffix) {
+      const morphMismatch = bankOptions.some((option) => !option.toLowerCase().endsWith(enforceSuffix));
+      if (morphMismatch) {
+        state.drops.bankMorph += 1;
+        recordDrop(filterSummary, "bankMorph", bankOptions.join(" | "));
+        return;
+      }
+    }
+  }
 
   const reconstructed = prompt.includes("_____")
     ? prompt.replace("_____", answer)
@@ -482,6 +605,18 @@ async function analyzeFile({ filePath, type }, filterConfig) {
           fatal,
           error: `missing required header(s): ${missing.join(", ")}`,
         };
+      }
+      if (type === "gapfill") {
+        const headerSet = new Set(headers.map((header) => header.toLowerCase()));
+        if (!headerSet.has("answers") && !headerSet.has("answer")) {
+          fatal = true;
+          return {
+            filePath,
+            type,
+            fatal,
+            error: "missing required header(s): answers",
+          };
+        }
       }
       headerChecked = true;
       continue;

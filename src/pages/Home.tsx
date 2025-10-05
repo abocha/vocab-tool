@@ -9,15 +9,18 @@ import {
 } from "../lib/matching";
 import { createItemId } from "../lib/id";
 import {
+  getDefaultGapFillControls,
   getDefaultInspectorFilters,
   getDefaultInspectorState,
   getDefaultSettings,
+  loadInspectorPresets,
   loadInspectorState,
   loadProgress,
   loadSettings,
   loadMatchingSetSize,
   recordProgress,
   resetProgress,
+  saveInspectorPresets,
   saveMatchingSetSize,
   saveInspectorState,
   saveSettings,
@@ -26,9 +29,11 @@ import type {
   AppSettings,
   ExerciseItem,
   InspectorFilters,
+  InspectorPreset,
   MatchingItem,
   MatchingPair,
   ProgressMap,
+  GapFillInspectorControls,
 } from "../types";
 import { TopBar } from "../components/TopBar";
 import { Footer } from "../components/Footer";
@@ -103,6 +108,10 @@ export function Home() {
   const [showInspectorInfo, setShowInspectorInfo] = useState<boolean>(
     DEFAULT_INSPECTOR_STATE.showInfo,
   );
+  const [gapFillControls, setGapFillControls] = useState<GapFillInspectorControls>(
+    getDefaultGapFillControls(),
+  );
+  const [presets, setPresets] = useState<InspectorPreset[]>([]);
   const [matchingDiagnostics, setMatchingDiagnostics] = useState<MatchingDiagnostics | null>(null);
   const [matchingPairs, setMatchingPairs] = useState<MatchingPair[]>([]);
   const [matchingSetSize, setMatchingSetSize] = useState<number>(DEFAULT_MATCHING_SET_SIZE);
@@ -259,6 +268,7 @@ export function Home() {
       setIsInspectorOpen(DEFAULT_INSPECTOR_STATE.isOpen);
       setShowInspectorDetails(DEFAULT_INSPECTOR_STATE.showDetails);
       setShowInspectorInfo(DEFAULT_INSPECTOR_STATE.showInfo);
+      setGapFillControls(getDefaultGapFillControls());
       return;
     }
     const persisted = loadInspectorState(settings.level, settings.exerciseType, packFingerprint);
@@ -267,12 +277,21 @@ export function Home() {
     setIsInspectorOpen(persisted.isOpen);
     setShowInspectorDetails(persisted.showDetails);
     setShowInspectorInfo(persisted.showInfo);
+    setGapFillControls({ ...persisted.gapFill });
     inspectorHydratedRef.current = true;
   }, [packFingerprint, settings.level, settings.exerciseType]);
 
+  useEffect(() => {
+    setPresets(loadInspectorPresets(settings.level, settings.exerciseType));
+  }, [settings.level, settings.exerciseType]);
+
   const filteredItems = useMemo(
-    () => applyInspectorFilters(items, inspectorFilters, hiddenItemIds, { regex: compiledRegex }),
-    [items, inspectorFilters, hiddenItemIds, compiledRegex],
+    () =>
+      applyInspectorFilters(items, inspectorFilters, hiddenItemIds, {
+        regex: compiledRegex,
+        gapFill: gapFillControls,
+      }),
+    [items, inspectorFilters, hiddenItemIds, compiledRegex, gapFillControls],
   );
 
   const preparedItems = useMemo(() => {
@@ -443,6 +462,124 @@ export function Home() {
     setShowInspectorInfo((prev) => !prev);
   }, []);
 
+  const handleGapFillControlsChange = useCallback((next: GapFillInspectorControls) => {
+    setGapFillControls(next);
+  }, []);
+
+  const applyPreset = useCallback(
+    (preset: InspectorPreset) => {
+      setInspectorFilters({ ...preset.filters });
+      setHiddenItemIds(new Set(preset.hiddenIds ?? []));
+      setGapFillControls({ ...preset.gapFill });
+      handleSettingsChange({ ...preset.settings });
+      handleMatchingSetSizeChange(preset.matchingSetSize);
+
+      if (preset.settings.exerciseType === "matching") {
+        const seed = preset.matchingSeed ?? `preset-${Math.random().toString(36).slice(2, 10)}`;
+        setMatchingSeed(seed);
+        urlSeedRef.current = seed;
+      } else {
+        setMatchingSeed(null);
+        urlSeedRef.current = null;
+      }
+    },
+    [handleMatchingSetSizeChange, handleSettingsChange],
+  );
+
+  const handleSavePreset = useCallback(
+    (name: string): boolean => {
+      const trimmed = name.trim();
+      if (!trimmed) {
+        return false;
+      }
+
+      const id = createItemId(
+        settings.exerciseType,
+        `${settings.level}|${settings.exerciseType}|${trimmed}|${Date.now()}`,
+      );
+      const preset: InspectorPreset = {
+        id,
+        name: trimmed,
+        createdAt: new Date().toISOString(),
+        filters: { ...inspectorFilters },
+        hiddenIds: Array.from(hiddenItemIds),
+        gapFill: { ...gapFillControls },
+        settings: { ...settings },
+        matchingSetSize,
+        matchingSeed: settings.exerciseType === "matching" ? matchingSeed ?? undefined : undefined,
+      };
+
+      const filtered = presets.filter((entry) => entry.id !== id && entry.name !== trimmed);
+      const next = [...filtered, preset].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      setPresets(next);
+      saveInspectorPresets(settings.level, settings.exerciseType, next);
+      return true;
+    },
+    [
+      gapFillControls,
+      hiddenItemIds,
+      inspectorFilters,
+      matchingSeed,
+      matchingSetSize,
+      presets,
+      settings,
+    ],
+  );
+
+  const handleApplyPreset = useCallback(
+    (presetId: string) => {
+      const preset = presets.find((entry) => entry.id === presetId);
+      if (!preset) {
+        return;
+      }
+      applyPreset(preset);
+    },
+    [applyPreset, presets],
+  );
+
+  const handleDeletePreset = useCallback(
+    (presetId: string) => {
+      const next = presets.filter((entry) => entry.id !== presetId);
+      setPresets(next);
+      saveInspectorPresets(settings.level, settings.exerciseType, next);
+    },
+    [presets, settings.exerciseType, settings.level],
+  );
+
+  const handleDuplicatePreset = useCallback(
+    (presetId: string) => {
+      const preset = presets.find((entry) => entry.id === presetId);
+      if (!preset) {
+        return;
+      }
+      const names = new Set(presets.map((entry) => entry.name));
+      let copyNameBase = `${preset.name} (copy)`;
+      let counter = 2;
+      while (names.has(copyNameBase)) {
+        copyNameBase = `${preset.name} (copy ${counter})`;
+        counter += 1;
+      }
+      const newSeed = preset.settings.exerciseType === "matching"
+        ? `preset-${Math.random().toString(36).slice(2, 10)}`
+        : preset.matchingSeed;
+      const duplicate: InspectorPreset = {
+        ...preset,
+        id: createItemId(
+          preset.settings.exerciseType,
+          `${preset.id}|copy|${Date.now()}`,
+        ),
+        name: copyNameBase,
+        createdAt: new Date().toISOString(),
+        matchingSeed: newSeed,
+      };
+      const next = [duplicate, ...presets];
+      setPresets(next);
+      saveInspectorPresets(settings.level, settings.exerciseType, next);
+      applyPreset(duplicate);
+    },
+    [applyPreset, presets, settings.exerciseType, settings.level],
+  );
+
   useEffect(() => {
     if (!inspectorHydratedRef.current) {
       return;
@@ -457,6 +594,7 @@ export function Home() {
       isOpen: isInspectorOpen,
       showDetails: showInspectorDetails,
       showInfo: showInspectorInfo,
+      gapFill: gapFillControls,
     });
   }, [
     inspectorFilters,
@@ -467,6 +605,7 @@ export function Home() {
     packFingerprint,
     settings.level,
     settings.exerciseType,
+    gapFillControls,
   ]);
 
   let content: React.ReactNode = null;
@@ -500,6 +639,7 @@ export function Home() {
             onResult={(result) => handleResult(currentItem, result)}
             onNext={handleNext}
             existingResult={existingResult}
+            controls={gapFillControls}
           />
         );
         break;
@@ -554,7 +694,7 @@ export function Home() {
         onResetProgress={handleResetProgress}
         matchingSetSize={matchingSetSize}
         onMatchingSetSizeChange={handleMatchingSetSizeChange}
-        matchingSeed={urlSeedRef.current}
+        matchingSeed={matchingSeed}
       />
       <main className="app-main" aria-live="polite">
         {state === "ready" && (bannerIssues.length > 0 || rowCount === 0) && (
@@ -601,6 +741,13 @@ export function Home() {
         rowCount={rowCount}
         matchingDiagnostics={matchingDiagnostics}
         regexError={compiledRegexError}
+        gapFillControls={gapFillControls}
+        onGapFillControlsChange={handleGapFillControlsChange}
+        presets={presets}
+        onSavePreset={handleSavePreset}
+        onApplyPreset={handleApplyPreset}
+        onDuplicatePreset={handleDuplicatePreset}
+        onDeletePreset={handleDeletePreset}
       />
       <Footer />
     </div>

@@ -13,10 +13,11 @@ Cheap heuristics to flag low-quality items and protect the learner experience.
 - **Duplicates**: MinHash/normalized text dedup within a pack.
 - **Toxicity/basic safety**: banned list; skip sensitive topics.
 - **Attribution presence**: `source` and `license` non-empty.
+- **Bank hygiene** (gap-fill): options unique, POS/morph match the slot, no stray stopwords unless grammar mode, bank size ≥ minimum, answer present.
 
 ### Gap-Fill Specific
 
-- Bank validity: all options share required POS/morph; distractors not identical to answer.
+- Bank validity: all options share required POS/morph (using the exported `bank_meta.slot` when available); distractors not identical to answer.
 - Banned blanks: reject rows where the blank token has avoid_as_blank, is a proper noun/number/date, or falls outside Zipf band for the chosen difficulty (unless grammar mode).
 - Collocation sanity: if gap_mode=collocation, ensure the partner token appears in the sentence.
 

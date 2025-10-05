@@ -616,39 +616,40 @@ function finalizeExamples(entry) {
 }
 
 function finalizeCollocations(entry, pos, limits) {
-  const result = {};
+  const results = [];
   const { min, max } = limits;
 
+  const addCandidates = (bucket, slot) => {
+    const candidates = sortBucket(bucket, max);
+    if (candidates.length >= min) {
+      candidates.forEach((candidate) => {
+        if (!candidate || !candidate.partner) return;
+        results.push({
+          anchor: entry.lemma,
+          partner: candidate.partner,
+          score: candidate.score,
+          slot,
+        });
+      });
+    }
+  };
+
   if (pos === "NOUN") {
-    const candidates = sortBucket(entry.collocationBuckets.adjForNoun, max);
-    if (candidates.length >= min) {
-      result.ADJ = candidates;
-    }
+    addCandidates(entry.collocationBuckets.adjForNoun, "ADJ");
   } else if (pos === "VERB") {
-    const candidates = sortBucket(entry.collocationBuckets.nounForVerb, max);
-    if (candidates.length >= min) {
-      result.NOUN = candidates;
-    }
+    addCandidates(entry.collocationBuckets.nounForVerb, "NOUN");
   } else if (pos === "ADJ") {
-    const candidates = sortBucket(entry.collocationBuckets.nounForAdj, max);
-    if (candidates.length >= min) {
-      result.NOUN = candidates;
-    }
+    addCandidates(entry.collocationBuckets.nounForAdj, "NOUN");
   } else if (pos === "ADV") {
-    const verbCandidates = sortBucket(entry.collocationBuckets.verbForAdv, max);
-    if (verbCandidates.length >= min) {
-      result.VERB = verbCandidates;
-    }
-    const adjCandidates = sortBucket(entry.collocationBuckets.adjForAdv, max);
-    if (adjCandidates.length >= min) {
-      result.ADJ = adjCandidates;
-    }
+    addCandidates(entry.collocationBuckets.verbForAdv, "VERB");
+    addCandidates(entry.collocationBuckets.adjForAdv, "ADJ");
   }
 
-  return result;
+  return results;
 }
 
 function sortBucket(bucket, max) {
+  if (!bucket) return [];
   return Array.from(bucket.entries())
     .sort((a, b) => {
       if (b[1].count === a[1].count) {
@@ -656,8 +657,8 @@ function sortBucket(bucket, max) {
       }
       return b[1].count - a[1].count;
     })
-    .map(([key]) => key)
-    .filter((value) => value)
+    .map(([key, value]) => ({ partner: key, score: value?.count ?? value ?? 0 }))
+    .filter((entry) => entry.partner)
     .slice(0, max);
 }
 
@@ -896,13 +897,15 @@ async function main() {
       continue;
     }
 
-    for (const key of Object.keys(collocations)) {
-      collocations[key] = collocations[key].filter(
-        (value) => !isAcronym(value, filterConfig.acronymMinLen, filterConfig.allowlist),
-      );
-    }
+    const collocEntries = Array.isArray(collocations)
+      ? collocations.filter((entry) =>
+          entry && typeof entry.partner === "string"
+            ? !isAcronym(entry.partner, filterConfig.acronymMinLen, filterConfig.allowlist)
+            : false,
+        )
+      : [];
 
-    const collocCount = Object.values(collocations).reduce((sum, arr) => sum + arr.length, 0);
+    const collocCount = collocEntries.length;
 
     if (examples.length === 0 || collocCount < 2) {
       continue;
@@ -916,7 +919,9 @@ async function main() {
       pos,
       freq_zipf: freqZipf,
       examples,
-      collocations,
+      collocations: collocEntries,
+      distractors: Array.isArray(entry.distractors) ? entry.distractors : [],
+      flags: {},
       source: SOURCE,
       license: LICENSE,
     };

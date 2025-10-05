@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { GapFillItem } from "../types";
+import type { BankQuality, GapFillInspectorControls, GapFillItem } from "../types";
 import { isTextMatch } from "../lib/normalize";
 
 interface GapFillProps {
@@ -7,11 +7,12 @@ interface GapFillProps {
   onResult: (correct: boolean) => void;
   onNext: () => void;
   existingResult?: boolean;
+  controls?: GapFillInspectorControls;
 }
 
 type Feedback = "correct" | "incorrect" | null;
 
-export function GapFill({ item, onResult, onNext, existingResult }: GapFillProps) {
+export function GapFill({ item, onResult, onNext, existingResult, controls }: GapFillProps) {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [checked, setChecked] = useState(false);
@@ -24,8 +25,70 @@ export function GapFill({ item, onResult, onNext, existingResult }: GapFillProps
 
   const promptSegments = useMemo(() => item.prompt.split("_____") ?? [], [item.prompt]);
 
+  const acceptableAnswers = useMemo(() => item.answers ?? [item.answer], [item.answers, item.answer]);
+  const bankQualityLabel = useMemo(() => {
+    if (!item.bankQuality) return null;
+    const labels: Record<BankQuality, string> = {
+      solid: "Solid bank",
+      soft: "Soft bank",
+      needs_review: "Needs review",
+    };
+    return labels[item.bankQuality];
+  }, [item.bankQuality]);
+
+  const bankQualityClass = useMemo(() => {
+    if (!item.bankQuality || item.bankQuality === "solid") return "";
+    return `exercise__bank-badge exercise__bank-badge--${item.bankQuality}`;
+  }, [item.bankQuality]);
+
+  const bankTags = useMemo(() => item.bankMeta?.tags ?? [], [item.bankMeta?.tags]);
+  const slotLabel = useMemo(() => item.bankMeta?.slot ?? null, [item.bankMeta?.slot]);
+
+  const wordBank = useMemo(() => {
+    if (!item.bank || item.bank.length === 0) {
+      return [] as string[];
+    }
+    if (!controls) {
+      return item.bank;
+    }
+    const maxItems = Math.max(1, controls.bankSize);
+    return item.bank.slice(0, Math.min(maxItems, item.bank.length));
+  }, [item.bank, controls]);
+
+  const hintsData = item.hints ?? {};
+
+  const textualHints = useMemo(() => {
+    const hints: string[] = [];
+    if (controls?.hints.initialLetter) {
+      const first = hintsData.first ?? acceptableAnswers[0]?.charAt(0);
+      if (first) {
+        hints.push(`Starts with \u201c${first}\u201d`);
+      }
+    }
+    if (controls?.hints.pos) {
+      const posHint = hintsData.pos ?? hintsData.partOfSpeech;
+      if (posHint) {
+        hints.push(`Part of speech: ${posHint}`);
+      }
+    }
+    if (controls?.hints.collocationCue) {
+      const cueHint = hintsData.cue ?? hintsData.collocation ?? hintsData.partner;
+      if (cueHint) {
+        hints.push(`Collocation cue: ${cueHint}`);
+      }
+    }
+    return hints;
+  }, [acceptableAnswers, controls, hintsData]);
+
+  const ttsSource = useMemo(() => {
+    if (!controls?.hints.tts) {
+      return "";
+    }
+    return hintsData.tts ?? hintsData.audio ?? "";
+  }, [controls, hintsData]);
+
   const handleCheck = () => {
-    const correct = isTextMatch(answer, item.answer);
+    const correct = acceptableAnswers.some((expected) => isTextMatch(answer, expected));
     setFeedback(correct ? "correct" : "incorrect");
     setChecked(true);
     onResult(correct);
@@ -63,6 +126,29 @@ export function GapFill({ item, onResult, onNext, existingResult }: GapFillProps
           aria-label="Fill in the blank"
         />
       </label>
+      {wordBank.length > 0 && (
+        <aside className="exercise__word-bank" aria-label="Word bank">
+          <h4>Word bank</h4>
+          {bankQualityLabel && bankQualityClass && (
+            <span className={bankQualityClass}>{bankQualityLabel}</span>
+          )}
+          {slotLabel && <span className="exercise__slot-label">Slot: {slotLabel}</span>}
+          {bankTags.length > 0 && (
+            <div className="exercise__bank-tags" aria-label="Bank tags">
+              {bankTags.map((tag) => (
+                <span key={tag} className={`exercise__bank-tag exercise__bank-tag--${tag}`}>
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+          <ul>
+            {wordBank.map((option, index) => (
+              <li key={`${item.id}-bank-${index}`}>{option}</li>
+            ))}
+          </ul>
+        </aside>
+      )}
       <div className="exercise__actions">
         <button
           type="button"
@@ -74,17 +160,44 @@ export function GapFill({ item, onResult, onNext, existingResult }: GapFillProps
         <button
           type="button"
           onClick={onNext}
+        >
+          Skip
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
           disabled={!checked}
         >
           Next →
         </button>
       </div>
+      {(textualHints.length > 0 || (ttsSource && controls?.hints.tts)) && (
+        <div className="exercise__hints" role="note">
+          <h4>Hints</h4>
+          {textualHints.length > 0 && (
+            <ul>
+              {textualHints.map((hint, index) => (
+                <li key={`${item.id}-hint-${index}`}>{hint}</li>
+              ))}
+            </ul>
+          )}
+          {ttsSource && controls?.hints.tts && (
+            <div className="exercise__hint-audio">
+              <audio controls preload="none" src={ttsSource}>
+                Your browser does not support the audio element.
+              </audio>
+            </div>
+          )}
+        </div>
+      )}
       {feedback && (
         <div
           className={`exercise__feedback exercise__feedback--${feedback}`}
           role="status"
         >
-          {feedback === "correct" ? "✓ Correct" : `✗ Not quite. Answer: ${item.answer}`}
+          {feedback === "correct"
+            ? "✓ Correct"
+            : `✗ Not quite. Answer: ${acceptableAnswers.join(", ")}`}
         </div>
       )}
       {item.source && (

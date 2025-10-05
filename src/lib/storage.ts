@@ -1,19 +1,23 @@
 import type {
   AppSettings,
   ExerciseType,
+  GapFillInspectorControls,
   InspectorFilters,
+  InspectorPreset,
   InspectorStateSnapshot,
   Level,
   ProgressEntry,
   ProgressMap,
 } from "../types";
 import { MAX_REGEX_PATTERN_LENGTH } from "./inspector";
+import { DEFAULT_MATCHING_SET_SIZE, clampSetSize } from "./matching";
 
 const STORAGE_PREFIX = "esl-vocab-mvp";
 const SETTINGS_KEY = `${STORAGE_PREFIX}/settings`;
 const PROGRESS_KEY = `${STORAGE_PREFIX}/progress`;
 const INSPECTOR_KEY = `${STORAGE_PREFIX}/inspector`;
 const MATCHING_SET_KEY = "matching.setSize";
+const PRESETS_KEY = `${STORAGE_PREFIX}/inspector-presets`;
 
 const DEFAULT_SETTINGS: AppSettings = {
   level: "A2",
@@ -27,6 +31,21 @@ const DEFAULT_INSPECTOR_FILTERS: InspectorFilters = {
   minLength: null,
   maxLength: null,
   regex: "",
+  bankQuality: "all",
+  relaxedOnly: false,
+};
+
+const DEFAULT_GAP_FILL_CONTROLS: GapFillInspectorControls = {
+  mode: "target",
+  bankSize: 6,
+  hints: {
+    initialLetter: false,
+    pos: false,
+    collocationCue: false,
+    tts: false,
+  },
+  difficulty: "A2",
+  maxBlanksPerSentence: 1,
 };
 
 function isBrowser(): boolean {
@@ -164,6 +183,8 @@ function sanitizeFilters(filters: InspectorFilters): InspectorFilters {
     minLength: null,
     maxLength: null,
     regex: typeof filters.regex === "string" ? filters.regex : "",
+    bankQuality: "all",
+    relaxedOnly: Boolean(filters.relaxedOnly),
   };
 
   if (normalized.regex.length > MAX_REGEX_PATTERN_LENGTH) {
@@ -178,10 +199,65 @@ function sanitizeFilters(filters: InspectorFilters): InspectorFilters {
     normalized.maxLength = filters.maxLength;
   }
 
+  const bankQuality = filters.bankQuality;
+  if (
+    bankQuality === "solid" ||
+    bankQuality === "soft" ||
+    bankQuality === "needs_review" ||
+    bankQuality === "all"
+  ) {
+    normalized.bankQuality = bankQuality;
+  }
+
   return normalized;
 }
 
 type InspectorStateMap = Record<string, InspectorStateSnapshot>;
+type InspectorPresetMap = Record<string, InspectorPreset[]>;
+
+const GAP_FILL_BANK_MIN = 4;
+const GAP_FILL_BANK_MAX = 8;
+const GAP_FILL_ALLOWED_MODES = new Set(["target", "collocation", "grammar"]);
+const GAP_FILL_ALLOWED_DIFFICULTIES = new Set(["A1", "A2", "B1"]);
+
+function clampGapFillBankSize(value: unknown): number {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return DEFAULT_GAP_FILL_CONTROLS.bankSize;
+  }
+  if (value < GAP_FILL_BANK_MIN) return GAP_FILL_BANK_MIN;
+  if (value > GAP_FILL_BANK_MAX) return GAP_FILL_BANK_MAX;
+  return Math.round(value);
+}
+
+function sanitizeGapFillControls(
+  value: Partial<GapFillInspectorControls> | undefined,
+): GapFillInspectorControls {
+  const defaults = getDefaultGapFillControls();
+  const mode = typeof value?.mode === "string" && GAP_FILL_ALLOWED_MODES.has(value.mode)
+    ? (value.mode as GapFillInspectorControls["mode"])
+    : defaults.mode;
+  const bankSize = clampGapFillBankSize(value?.bankSize);
+  const difficulty =
+    typeof value?.difficulty === "string" && GAP_FILL_ALLOWED_DIFFICULTIES.has(value.difficulty)
+      ? (value.difficulty as GapFillInspectorControls["difficulty"])
+      : defaults.difficulty;
+  const maxBlanks = value?.maxBlanksPerSentence === 2 ? 2 : 1;
+  const hintsSource = (value?.hints ?? {}) as Partial<GapFillInspectorControls["hints"]>;
+  const hints = {
+    initialLetter: Boolean(hintsSource.initialLetter),
+    pos: Boolean(hintsSource.pos),
+    collocationCue: Boolean(hintsSource.collocationCue),
+    tts: Boolean(hintsSource.tts),
+  };
+
+  return {
+    mode,
+    bankSize,
+    hints,
+    difficulty,
+    maxBlanksPerSentence: maxBlanks,
+  };
+}
 
 function createInspectorKey(level: Level, type: ExerciseType, fingerprint: string): string {
   return `${level}:${type}:${fingerprint}`;
@@ -217,6 +293,38 @@ function writeInspectorStateMap(state: InspectorStateMap): void {
   }
 }
 
+function createPresetKey(level: Level, type: ExerciseType): string {
+  return `${level}:${type}`;
+}
+
+function readPresetMap(): InspectorPresetMap {
+  if (!isBrowser()) {
+    return {};
+  }
+  try {
+    const stored = window.localStorage.getItem(PRESETS_KEY);
+    if (!stored) {
+      return {};
+    }
+    const parsed = JSON.parse(stored) as InspectorPresetMap;
+    return parsed ?? {};
+  } catch (error) {
+    console.warn("Failed to read inspector presets", error);
+    return {};
+  }
+}
+
+function writePresetMap(map: InspectorPresetMap): void {
+  if (!isBrowser()) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(PRESETS_KEY, JSON.stringify(map));
+  } catch (error) {
+    console.warn("Failed to persist inspector presets", error);
+  }
+}
+
 export function getDefaultInspectorFilters(): InspectorFilters {
   return { ...DEFAULT_INSPECTOR_FILTERS };
 }
@@ -228,7 +336,52 @@ export function getDefaultInspectorState(): InspectorStateSnapshot {
     isOpen: true,
     showDetails: false,
     showInfo: false,
+    gapFill: getDefaultGapFillControls(),
   };
+}
+
+export function getDefaultGapFillControls(): GapFillInspectorControls {
+  return {
+    mode: DEFAULT_GAP_FILL_CONTROLS.mode,
+    bankSize: DEFAULT_GAP_FILL_CONTROLS.bankSize,
+    hints: { ...DEFAULT_GAP_FILL_CONTROLS.hints },
+    difficulty: DEFAULT_GAP_FILL_CONTROLS.difficulty,
+    maxBlanksPerSentence: DEFAULT_GAP_FILL_CONTROLS.maxBlanksPerSentence,
+  };
+}
+
+export function loadInspectorPresets(level: Level, type: ExerciseType): InspectorPreset[] {
+  const map = readPresetMap();
+  const key = createPresetKey(level, type);
+  const stored = map[key];
+  if (!stored || !Array.isArray(stored)) {
+    return [];
+  }
+  return stored.map((entry) => ({
+    ...entry,
+    hiddenIds: Array.isArray(entry.hiddenIds)
+      ? entry.hiddenIds.filter((id): id is string => typeof id === "string")
+      : [],
+    filters: sanitizeFilters(entry.filters ?? getDefaultInspectorFilters()),
+    gapFill: sanitizeGapFillControls(entry.gapFill),
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(entry.settings as Partial<AppSettings>),
+    },
+    matchingSetSize: clampSetSize(Number(entry.matchingSetSize ?? DEFAULT_MATCHING_SET_SIZE)),
+    matchingSeed: typeof entry.matchingSeed === "string" ? entry.matchingSeed : undefined,
+  }));
+}
+
+export function saveInspectorPresets(
+  level: Level,
+  type: ExerciseType,
+  presets: InspectorPreset[],
+): void {
+  const map = readPresetMap();
+  const key = createPresetKey(level, type);
+  map[key] = presets;
+  writePresetMap(map);
 }
 
 export function loadInspectorState(
@@ -243,6 +396,7 @@ export function loadInspectorState(
   if (!stored) {
     const legacy = map[`${level}:${type}`];
     if (legacy) {
+      const partialLegacy = legacy as Partial<InspectorStateSnapshot>;
       return {
         filters: sanitizeFilters(legacy.filters ?? getDefaultInspectorFilters()),
         hiddenIds: Array.isArray(legacy.hiddenIds)
@@ -250,13 +404,10 @@ export function loadInspectorState(
           : [],
         isOpen: typeof legacy.isOpen === "boolean" ? legacy.isOpen : true,
         showDetails:
-          typeof (legacy as Partial<InspectorStateSnapshot>).showDetails === "boolean"
-            ? Boolean((legacy as Partial<InspectorStateSnapshot>).showDetails)
-            : false,
+          typeof partialLegacy.showDetails === "boolean" ? Boolean(partialLegacy.showDetails) : false,
         showInfo:
-          typeof (legacy as Partial<InspectorStateSnapshot>).showInfo === "boolean"
-            ? Boolean((legacy as Partial<InspectorStateSnapshot>).showInfo)
-            : false,
+          typeof partialLegacy.showInfo === "boolean" ? Boolean(partialLegacy.showInfo) : false,
+        gapFill: sanitizeGapFillControls(partialLegacy.gapFill),
       };
     }
     return getDefaultInspectorState();
@@ -269,6 +420,7 @@ export function loadInspectorState(
   const isOpen = typeof stored.isOpen === "boolean" ? stored.isOpen : true;
   const showDetails = typeof stored.showDetails === "boolean" ? stored.showDetails : false;
   const showInfo = typeof stored.showInfo === "boolean" ? stored.showInfo : false;
+  const gapFill = sanitizeGapFillControls(stored.gapFill);
 
   return {
     filters,
@@ -276,6 +428,7 @@ export function loadInspectorState(
     isOpen,
     showDetails,
     showInfo,
+    gapFill,
   };
 }
 
@@ -294,6 +447,7 @@ export function saveInspectorState(
     isOpen: Boolean(state.isOpen),
     showDetails: Boolean(state.showDetails),
     showInfo: Boolean(state.showInfo),
+    gapFill: sanitizeGapFillControls(state.gapFill),
   };
 
   writeInspectorStateMap(map);

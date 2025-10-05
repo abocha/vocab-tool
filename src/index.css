@@ -307,6 +307,76 @@ button:focus-visible {
   color: #475569;
 }
 
+.exercise__word-bank {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  background: #f5f5f5;
+  border-radius: 8px;
+}
+
+.exercise__word-bank ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+
+.exercise__word-bank li {
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.exercise__bank-badge {
+  display: inline-flex;
+  margin-bottom: 0.5rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.exercise__bank-badge--soft {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.exercise__bank-badge--needs_review {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
+.exercise__slot-label {
+  display: inline-block;
+  margin-bottom: 0.35rem;
+  font-size: 0.75rem;
+  color: #334155;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.exercise__bank-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.exercise__bank-tag {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
 .matching__scores {
   margin-top: 0.75rem;
   display: flex;
@@ -385,6 +455,11 @@ button:focus-visible {
   margin: 0.25rem 0 0;
   font-size: 0.85rem;
   color: #475569;
+}
+
+.pack-inspector__meta--warning {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .pack-inspector__toggle {
@@ -538,11 +613,87 @@ button:focus-visible {
   gap: 1rem;
 }
 
+.pack-inspector__control-group--column {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
 .pack-inspector__control-group label {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.9rem;
+}
+
+.pack-inspector__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+}
+
+.pack-inspector__checkbox input[type="checkbox"] {
+  margin: 0;
+}
+
+.pack-inspector__presets {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.pack-inspector__preset-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pack-inspector__preset-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.pack-inspector__preset-meta span {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.pack-inspector__preset-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pack-inspector__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.pack-inspector__badge--soft {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.pack-inspector__badge--needs_review {
+  background-color: #fee2e2;
+  color: #b91c1c;
 }
 
 .pack-inspector__label-text {
@@ -617,6 +768,16 @@ button:focus-visible {
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
 }
 
+.pack-inspector__item--soft {
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background-color: rgba(251, 191, 36, 0.12);
+}
+
+.pack-inspector__item--needs_review {
+  border: 1px solid rgba(248, 113, 113, 0.55);
+  background-color: rgba(248, 113, 113, 0.15);
+}
+
 .pack-inspector__item--muted {
   background: transparent;
   border: 1px dashed #cbd5e1;
@@ -640,6 +801,27 @@ button:focus-visible {
   gap: 0.5rem;
   font-size: 0.8rem;
   color: #475569;
+}
+
+.pack-inspector__slot {
+  font-weight: 600;
+}
+
+.pack-inspector__tags {
+  display: inline-flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.pack-inspector__tag {
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background-color: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .pack-inspector__empty {

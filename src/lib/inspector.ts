@@ -1,6 +1,8 @@
 import type {
   ExerciseItem,
   ExerciseType,
+  GapFillHints,
+  GapFillInspectorControls,
   GapFillItem,
   InspectorFilters,
   Level,
@@ -112,7 +114,7 @@ export function applyInspectorFilters(
   items: ExerciseItem[],
   filters: InspectorFilters,
   hiddenIds: Set<string>,
-  options?: { regex?: RegExp | null },
+  options?: { regex?: RegExp | null; gapFill?: GapFillInspectorControls },
 ): ExerciseItem[] {
   const contains = filters.contains.trim().toLowerCase();
   const min = filters.minLength ?? null;
@@ -121,6 +123,9 @@ export function applyInspectorFilters(
 
   return items.filter((item) => {
     if (hiddenIds.has(item.id)) {
+      return false;
+    }
+    if ((filters.bankQuality !== "all" || filters.relaxedOnly) && item.type !== "gapfill") {
       return false;
     }
     const plain = cleanWhitespace(itemToPlainText(item));
@@ -140,20 +145,64 @@ export function applyInspectorFilters(
     if (regex && !regex.test(plain)) {
       return false;
     }
+
+    if (item.type === "gapfill") {
+      if (filters.bankQuality !== "all") {
+        const quality = item.bankQuality ?? "solid";
+        if (quality !== filters.bankQuality) {
+          return false;
+        }
+      }
+      if (filters.relaxedOnly) {
+        const hasRelaxed = item.bankMeta?.tags?.includes("relaxed");
+        if (!hasRelaxed) {
+          return false;
+        }
+      }
+      if (options?.gapFill) {
+        const controls = options.gapFill;
+        if (controls.mode && item.gapMode && controls.mode !== item.gapMode) {
+          return false;
+        }
+        const blankCount = (item.prompt.match(/_____/g) ?? []).length || 0;
+        if (blankCount > controls.maxBlanksPerSentence) {
+          return false;
+        }
+      }
+    }
     return true;
   });
 }
 
 function buildGapFillCsv(items: GapFillItem[], level: Level): string {
-  const header = "level,type,prompt,answer,source,license";
+  const header = "level,type,prompt,answers,answer,source,license,gap_mode,bank,hints,bank_quality,bank_meta";
+  const serializeHints = (hints: GapFillHints | undefined): string => {
+    if (!hints) {
+      return "";
+    }
+    return Object.entries(hints)
+      .map(([key, value]) => {
+        if (!key) {
+          return value ?? "";
+        }
+        return value ? `${key}=${value}` : key;
+      })
+      .join(";");
+  };
   const rows = items.map((item) => {
     const cells = [
       item.level ?? level,
       item.type,
       item.prompt,
+      (item.answers ?? [item.answer]).join("|"),
       item.answer,
       item.source ?? "",
       item.license ?? "",
+      item.gapMode ?? "",
+      item.bank ? item.bank.join("|") : "",
+      serializeHints(item.hints),
+      item.bankQuality ?? "",
+      item.bankMeta ? JSON.stringify(item.bankMeta) : "",
     ];
     return cells.map(csvEscape).join(",");
   });
@@ -223,11 +272,59 @@ function formatExportTimestamp(date: Date): string {
   return `${year}${month}${day}-${hours}${minutes}`;
 }
 
-function buildGapFillHtml(items: GapFillItem[]): { exercises: string; answers: string } {
+function buildGapFillHtml(
+  items: GapFillItem[],
+  controls?: GapFillInspectorControls,
+): { exercises: string; answers: string } {
   const exercises = items
     .map((item) => {
       const promptHtml = renderGapFillPrompt(item.prompt);
-      return `<li class="exercise-item"><div class="prompt">${promptHtml}</div></li>`;
+      const answers = item.answers ?? [item.answer];
+      const bank = controls ? (item.bank ?? []).slice(0, controls.bankSize) : item.bank ?? [];
+      const hintsData = item.hints ?? {};
+      const textualHints: string[] = [];
+
+      if (controls?.hints.initialLetter) {
+        const first = hintsData.first ?? answers[0]?.charAt(0);
+        if (first) {
+          textualHints.push(`Starts with “${escapeHtml(first)}”`);
+        }
+      }
+
+      if (controls?.hints.pos) {
+        const posHint = hintsData.pos ?? hintsData.partOfSpeech;
+        if (posHint) {
+          textualHints.push(`Part of speech: ${escapeHtml(posHint)}`);
+        }
+      }
+
+      if (controls?.hints.collocationCue) {
+        const cueHint = hintsData.cue ?? hintsData.collocation ?? hintsData.partner;
+        if (cueHint) {
+          textualHints.push(`Collocation cue: ${escapeHtml(cueHint)}`);
+        }
+      }
+
+      const ttsSource = controls?.hints.tts ? hintsData.tts ?? hintsData.audio ?? "" : "";
+
+      const bankHtml = bank.length
+        ? `<div class="gapfill-bank"><h4>Word bank</h4><ul>${bank
+            .map((entry) => `<li>${escapeHtml(entry)}</li>`)
+            .join("")}</ul></div>`
+        : "";
+
+      let hintsHtml = "";
+      if (textualHints.length > 0 || ttsSource) {
+        const textList = textualHints.length
+          ? `<ul>${textualHints.map((hint) => `<li>${hint}</li>`).join("")}</ul>`
+          : "";
+        const audio = ttsSource
+          ? `<div class="gapfill-hint__audio"><audio controls preload="none" src="${escapeHtml(ttsSource)}"></audio></div>`
+          : "";
+        hintsHtml = `<div class="gapfill-hints"><h4>Hints</h4>${textList}${audio}</div>`;
+      }
+
+      return `<li class="exercise-item"><div class="prompt">${promptHtml}</div>${bankHtml}${hintsHtml}</li>`;
     })
     .join("");
 
@@ -413,6 +510,58 @@ function buildHtmlStyles(): string {
         margin: 0 0.15em;
       }
 
+      .gapfill-bank {
+        margin: 0.65em 0;
+        padding: 0.5em 0.75em;
+        background: #f5f5f5;
+        border-radius: 6px;
+      }
+
+      .gapfill-bank h4 {
+        margin: 0 0 0.35em;
+        font-size: 0.95em;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+      }
+
+      .gapfill-bank ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4em 0.6em;
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      .gapfill-bank li {
+        padding: 0.2em 0.55em;
+        border: 1px solid #d2d2d2;
+        border-radius: 4px;
+        background: #fff;
+      }
+
+      .gapfill-hints {
+        margin: 0.65em 0;
+        padding: 0.55em 0.8em;
+        background: #eef6ff;
+        border-left: 3px solid #2f6fde;
+        border-radius: 4px;
+      }
+
+      .gapfill-hints h4 {
+        margin: 0 0 0.3em;
+        font-size: 0.95em;
+      }
+
+      .gapfill-hints ul {
+        margin: 0;
+        padding-left: 1.1em;
+      }
+
+      .gapfill-hint__audio {
+        margin-top: 0.4em;
+      }
+
       .matching-table {
         width: 100%;
         border-collapse: collapse;
@@ -497,6 +646,9 @@ export function buildHtmlExport(
   items: ExerciseItem[],
   type: ExerciseType,
   level: Level,
+  options?: {
+    gapFill?: GapFillInspectorControls;
+  },
 ): { html: string; filename: string } | null {
   if (items.length === 0) {
     return null;
@@ -509,7 +661,7 @@ export function buildHtmlExport(
   let sections: { exercises: string; answers: string };
   switch (type) {
     case "gapfill":
-      sections = buildGapFillHtml(items as GapFillItem[]);
+      sections = buildGapFillHtml(items as GapFillItem[], options?.gapFill);
       break;
     case "matching":
       sections = buildMatchingHtml(items as MatchingItem[]);

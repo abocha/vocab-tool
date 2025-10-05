@@ -93,6 +93,8 @@ Open the “Pack Inspector” panel below the exercise view to curate the curren
 - Toggle Shuffle, Max Items, and (for matching packs) the numeric “Pairs per Set” control (2–12). The value persists to `matching.setSize` unless a `?set` query parameter is present.
 - Export the curated subset to CSV or printable HTML directly in the browser. CSV files (e.g. `matching.curated.A2.20250304-1030.csv`) include a UTF-8 BOM for Excel, while HTML exports render exercises plus an answer key with safe escaping for sharing or printing.
 - Review diagnostics in-line: header mistakes, missing levels, mixed matching shapes, and other parser warnings are summarised in the inspector as well as in the banner above the learner card. Enable “Show info notices” and “Show detailed warnings” to reveal optional metadata notes and up to five concrete examples per issue type.
+- Banks now carry a quality badge (`solid`, `soft`, `needs review`). Filter on bank quality to focus QA on weaker sets—the inspector highlights soft/needs-review items in the list.
+- Toggle “Only banks with relaxed distractors” to jump straight to items that relied on a fallback option; tags and slot signatures are shown alongside each bank for quick inspection.
 
 The top-of-page banner also surfaces parse warnings and errors (missing columns, skipped rows, empty files) so malformed packs never crash the app—the UI simply falls back to a friendly empty state.
 

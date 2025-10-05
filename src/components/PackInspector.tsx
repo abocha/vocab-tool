@@ -1,9 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import type {
   AppSettings,
   ExerciseItem,
   ExerciseType,
+  GapFillInspectorControls,
+  GapMode,
   InspectorFilters,
+  InspectorPreset,
   Level,
 } from "../types";
 import type { MatchingDiagnostics, PackIssue } from "../lib/csv";
@@ -29,6 +32,25 @@ const PACK_FILENAMES: Record<ExerciseType, string> = {
   mcq: "mcq.csv",
   scramble: "scramble.csv",
 };
+
+const QUALITY_LABELS: Record<Exclude<InspectorFilters["bankQuality"], "all">, string> = {
+  solid: "Solid bank",
+  soft: "Soft bank",
+  needs_review: "Needs review",
+};
+
+const GAP_MODE_LABELS: Record<GapMode, string> = {
+  target: "Target lexis",
+  collocation: "Collocation",
+  grammar: "Grammar slot",
+};
+
+const GAP_MODE_OPTIONS: GapMode[] = ["target", "collocation", "grammar"];
+
+const GAP_FILL_DIFFICULTY_OPTIONS = ["A1", "A2", "B1"] as const;
+
+const GAP_FILL_BANK_MIN = 4;
+const GAP_FILL_BANK_MAX = 8;
 
 function parseLengthValue(value: string): number | null {
   if (value.trim() === "") {
@@ -65,6 +87,13 @@ interface PackInspectorProps {
   rowCount: number;
   matchingDiagnostics?: MatchingDiagnostics | null;
   regexError?: string | null;
+  gapFillControls: GapFillInspectorControls;
+  onGapFillControlsChange: (next: GapFillInspectorControls) => void;
+  presets: InspectorPreset[];
+  onSavePreset: (name: string) => boolean;
+  onApplyPreset: (id: string) => void;
+  onDuplicatePreset: (id: string) => void;
+  onDeletePreset: (id: string) => void;
 }
 
 function formatItemSummary(item: ExerciseItem): string {
@@ -136,12 +165,37 @@ export function PackInspector({
   rowCount,
   matchingDiagnostics,
   regexError,
+  gapFillControls,
+  onGapFillControlsChange,
+  presets,
+  onSavePreset,
+  onApplyPreset,
+  onDuplicatePreset,
+  onDeletePreset,
 }: PackInspectorProps) {
 
   const hiddenItems = useMemo(
     () => allItems.filter((item) => hiddenIds.has(item.id)),
     [allItems, hiddenIds],
   );
+
+  const hasGapFillBanks = useMemo(
+    () => allItems.some((item) => item.type === "gapfill" && item.bank && item.bank.length > 0),
+    [allItems],
+  );
+
+  const bankQualityCounts = useMemo(() => {
+    let solid = 0;
+    let soft = 0;
+    let needs = 0;
+    allItems.forEach((item) => {
+      if (item.type !== "gapfill" || !item.bankQuality) return;
+      if (item.bankQuality === "soft") soft += 1;
+      else if (item.bankQuality === "needs_review") needs += 1;
+      else if (item.bankQuality === "solid") solid += 1;
+    });
+    return { solid, soft, needs };
+  }, [allItems]);
 
   const datasetLabel = `${level} · ${TYPE_LABELS[exerciseType]}`;
   const sourcePath = `packs/${level}/${PACK_FILENAMES[exerciseType]}`;
@@ -205,6 +259,26 @@ export function PackInspector({
     });
   };
 
+  const handleGapFillControlChange = <Key extends keyof GapFillInspectorControls>(
+    key: Key,
+    value: GapFillInspectorControls[Key],
+  ) => {
+    onGapFillControlsChange({
+      ...gapFillControls,
+      [key]: value,
+    });
+  };
+
+  const handleHintToggle = (hint: keyof GapFillInspectorControls["hints"]) => {
+    onGapFillControlsChange({
+      ...gapFillControls,
+      hints: {
+        ...gapFillControls.hints,
+        [hint]: !gapFillControls.hints[hint],
+      },
+    });
+  };
+
   const handleExport = () => {
     const exportData = buildCsvExport(visibleItems, exerciseType, level);
     if (!exportData) {
@@ -214,7 +288,12 @@ export function PackInspector({
   };
 
   const handleHtmlExport = () => {
-    const exportData = buildHtmlExport(visibleItems, exerciseType, level);
+    const exportData = buildHtmlExport(
+      visibleItems,
+      exerciseType,
+      level,
+      exerciseType === "gapfill" ? { gapFill: gapFillControls } : undefined,
+    );
     if (!exportData) {
       return;
     }
@@ -233,6 +312,19 @@ export function PackInspector({
     filters.maxLength !== null &&
     filters.minLength > filters.maxLength;
 
+  const [presetName, setPresetName] = useState("");
+  const [presetError, setPresetError] = useState<string | null>(null);
+
+  const handleSavePresetClick = () => {
+    const success = onSavePreset(presetName);
+    if (success) {
+      setPresetName("");
+      setPresetError(null);
+    } else {
+      setPresetError("Enter a preset name before saving.");
+    }
+  };
+
   return (
     <section className="pack-inspector" aria-label="Pack inspector">
       <header className="pack-inspector__header">
@@ -250,6 +342,11 @@ export function PackInspector({
             Parsed {rowCount} row{rowCount === 1 ? "" : "s"} • Valid {allItems.length} item{allItems.length === 1 ? "" : "s"} • Filtered out {filteredOutCount}
             • Hidden {hiddenCount} • Displaying {visibleCount}
           </p>
+          {exerciseType === "gapfill" && (bankQualityCounts.soft > 0 || bankQualityCounts.needs > 0) && (
+            <p className="pack-inspector__meta pack-inspector__meta--warning" aria-live="polite">
+              Gap-fill banks: {bankQualityCounts.solid} solid • {bankQualityCounts.soft} soft • {bankQualityCounts.needs} needs review
+            </p>
+          )}
           {exerciseType === "matching" && matchingSummary && (
             <p className="pack-inspector__meta" aria-live="polite">
               Matching summary: {matchingSummary}
@@ -377,6 +474,33 @@ export function PackInspector({
                     }}
                   />
                 </label>
+                <label>
+                  <span>Bank quality</span>
+                  <select
+                    value={filters.bankQuality}
+                    onChange={(event) =>
+                      handleFilterChange(
+                        "bankQuality",
+                        event.target.value as InspectorFilters["bankQuality"],
+                      )
+                    }
+                  >
+                    <option value="all">All</option>
+                    <option value="solid">Solid</option>
+                    <option value="soft">Soft</option>
+                    <option value="needs_review">Needs review</option>
+                  </select>
+                </label>
+                <label className="pack-inspector__checkbox">
+                  <input
+                    type="checkbox"
+                    checked={filters.relaxedOnly}
+                    onChange={(event) =>
+                      handleFilterChange("relaxedOnly", event.target.checked)
+                    }
+                  />
+                  <span>Only banks with relaxed distractors</span>
+                </label>
               </div>
               {invalidRange && (
                 <p className="pack-inspector__hint" role="alert">
@@ -443,6 +567,168 @@ export function PackInspector({
                 </button>
               </div>
             </fieldset>
+            {exerciseType === "gapfill" && (
+              <fieldset>
+                <legend>Gap-fill controls</legend>
+                <div className="pack-inspector__control-group">
+                  <label>
+                    <span>Gap mode</span>
+                    <select
+                      value={gapFillControls.mode}
+                      onChange={(event) =>
+                        handleGapFillControlChange("mode", event.target.value as GapMode)
+                      }
+                    >
+                      {GAP_MODE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {GAP_MODE_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Bank size</span>
+                    <input
+                      type="number"
+                      min={GAP_FILL_BANK_MIN}
+                      max={GAP_FILL_BANK_MAX}
+                      step={1}
+                      value={gapFillControls.bankSize}
+                      onChange={(event) => {
+                        const parsed = Number.parseInt(event.target.value, 10);
+                        const clamped = Number.isNaN(parsed)
+                          ? GAP_FILL_BANK_MIN
+                          : Math.min(Math.max(parsed, GAP_FILL_BANK_MIN), GAP_FILL_BANK_MAX);
+                        handleGapFillControlChange("bankSize", clamped);
+                      }}
+                      disabled={!hasGapFillBanks}
+                    />
+                  </label>
+                  {!hasGapFillBanks && (
+                    <p className="pack-inspector__hint" role="note">
+                      Word banks unavailable for this pack.
+                    </p>
+                  )}
+                  <label>
+                    <span>Difficulty</span>
+                    <select
+                      value={gapFillControls.difficulty}
+                      onChange={(event) =>
+                        handleGapFillControlChange(
+                          "difficulty",
+                          event.target.value as GapFillInspectorControls["difficulty"],
+                        )
+                      }
+                    >
+                      {GAP_FILL_DIFFICULTY_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Max blanks / sentence</span>
+                    <select
+                      value={gapFillControls.maxBlanksPerSentence}
+                      onChange={(event) =>
+                        handleGapFillControlChange(
+                          "maxBlanksPerSentence",
+                          event.target.value === "2" ? 2 : 1,
+                        )
+                      }
+                    >
+                      <option value={1}>1</option>
+                      <option value={2}>2</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="pack-inspector__control-group pack-inspector__control-group--column">
+                  <span>Hints</span>
+                  <label className="pack-inspector__checkbox">
+                    <input
+                      type="checkbox"
+                      checked={gapFillControls.hints.initialLetter}
+                      onChange={() => handleHintToggle("initialLetter")}
+                    />
+                    <span>Initial letter</span>
+                  </label>
+                  <label className="pack-inspector__checkbox">
+                    <input
+                      type="checkbox"
+                      checked={gapFillControls.hints.pos}
+                      onChange={() => handleHintToggle("pos")}
+                    />
+                    <span>Part of speech</span>
+                  </label>
+                  <label className="pack-inspector__checkbox">
+                    <input
+                      type="checkbox"
+                      checked={gapFillControls.hints.collocationCue}
+                      onChange={() => handleHintToggle("collocationCue")}
+                    />
+                    <span>Collocation cue</span>
+                  </label>
+                  <label className="pack-inspector__checkbox">
+                    <input
+                      type="checkbox"
+                      checked={gapFillControls.hints.tts}
+                      onChange={() => handleHintToggle("tts")}
+                    />
+                    <span>TTS hint</span>
+                  </label>
+                </div>
+              </fieldset>
+            )}
+            <fieldset>
+              <legend>Presets</legend>
+              <div className="pack-inspector__control-group pack-inspector__control-group--column">
+                <label>
+                  <span>Preset name</span>
+                  <input
+                    type="text"
+                    value={presetName}
+                    onChange={(event) => setPresetName(event.target.value)}
+                    placeholder="e.g. Collocations A2"
+                  />
+                </label>
+                {presetError && (
+                  <p className="pack-inspector__hint" role="alert">
+                    {presetError}
+                  </p>
+                )}
+                <div className="pack-inspector__control-actions">
+                  <button type="button" onClick={handleSavePresetClick}>
+                    Save preset
+                  </button>
+                </div>
+              </div>
+              {presets.length > 0 ? (
+                <ul className="pack-inspector__presets">
+                  {presets.map((preset) => (
+                    <li key={preset.id} className="pack-inspector__preset-item">
+                      <div className="pack-inspector__preset-meta">
+                        <strong>{preset.name}</strong>
+                        <span>{new Date(preset.createdAt).toLocaleString()}</span>
+                      </div>
+                      <div className="pack-inspector__preset-actions">
+                        <button type="button" onClick={() => onApplyPreset(preset.id)}>
+                          Apply
+                        </button>
+                        <button type="button" onClick={() => onDuplicatePreset(preset.id)}>
+                          Duplicate w/ new seed
+                        </button>
+                        <button type="button" onClick={() => onDeletePreset(preset.id)}>
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="pack-inspector__empty">No presets saved yet.</p>
+              )}
+            </fieldset>
           </div>
           <div className="pack-inspector__lists">
             <section aria-label="Visible items">
@@ -454,20 +740,46 @@ export function PackInspector({
                 <p className="pack-inspector__empty">No items match the current filters.</p>
               ) : (
                 <ul className="pack-inspector__list">
-                  {visibleItems.map((item) => (
-                    <li key={item.id} className="pack-inspector__item">
+                  {visibleItems.map((item) => {
+                    const qualityClass =
+                      item.type === "gapfill" && item.bankQuality && item.bankQuality !== "solid"
+                        ? ` pack-inspector__item--${item.bankQuality}`
+                        : "";
+                    return (
+                      <li key={item.id} className={`pack-inspector__item${qualityClass}`}>
                       <div className="pack-inspector__item-body">
                         <div className="pack-inspector__item-summary">{formatItemSummary(item)}</div>
                         <div className="pack-inspector__item-meta">
                           <span>Length: {itemLength(item)}</span>
                           {item.source && <span>Source: {item.source}</span>}
+                          {item.type === "gapfill" && item.bankMeta?.slot && (
+                            <span className="pack-inspector__slot">Slot: {item.bankMeta.slot}</span>
+                          )}
+                          {item.type === "gapfill" && item.bankQuality && item.bankQuality !== "solid" && (
+                            <span
+                              className={`pack-inspector__badge pack-inspector__badge--${item.bankQuality}`}
+                              title={QUALITY_LABELS[item.bankQuality as keyof typeof QUALITY_LABELS]}
+                            >
+                              {QUALITY_LABELS[item.bankQuality as keyof typeof QUALITY_LABELS]}
+                            </span>
+                          )}
+                          {item.type === "gapfill" && item.bankMeta?.tags && item.bankMeta.tags.length > 0 && (
+                            <span className="pack-inspector__tags">
+                              {item.bankMeta.tags.map((tag) => (
+                                <span key={`${item.id}-tag-${tag}`} className={`pack-inspector__tag pack-inspector__tag--${tag}`}>
+                                  {tag}
+                                </span>
+                              ))}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <button type="button" onClick={() => onToggleHidden(item.id)}>
                         Hide
                       </button>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </section>

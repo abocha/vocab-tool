@@ -129,6 +129,9 @@ export function Matching({ item, onResult, onNext, existingResult }: MatchingPro
         <button type="button" onClick={handleCheck}>
           Check all
         </button>
+        <button type="button" onClick={onNext}>
+          Skip
+        </button>
         <button type="button" onClick={onNext} disabled={!checked}>
           Next →
         </button>

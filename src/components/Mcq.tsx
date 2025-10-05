@@ -57,6 +57,9 @@ export function Mcq({ item, onResult, onNext, existingResult }: McqProps) {
         <button type="button" onClick={handleCheck} disabled={!selection}>
           Check
         </button>
+        <button type="button" onClick={onNext}>
+          Skip
+        </button>
         <button type="button" onClick={onNext} disabled={!checked}>
           Next →
         </button>

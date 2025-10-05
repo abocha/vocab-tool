@@ -1,0 +1,68 @@
+{
+  "prepositionSets": [
+    ["in", "on", "at"],
+    ["to", "for", "with"],
+    ["from", "of", "about"],
+    ["over", "under", "between", "among"],
+    ["before", "after", "during", "while"],
+    ["into", "onto", "through", "across"]
+  ],
+  "articles": ["a", "an", "the", ""],
+  "auxiliaries": ["am", "is", "are", "was", "were", "be", "being", "been", "do", "does", "did", "have", "has", "had", "will", "would", "can", "could", "should", "may", "might", "must", "shall"],
+  "lightVerbs": ["make", "do", "take", "give", "get", "have", "put", "keep"],
+  "verbSynonymSets": [
+    ["make", "create", "produce", "form"],
+    ["improve", "enhance", "boost", "increase"],
+    ["help", "assist", "support", "aid"],
+    ["start", "begin", "launch", "initiate"],
+    ["ask", "request", "question", "inquire"],
+    ["decide", "choose", "select", "determine"],
+    ["explain", "describe", "clarify", "outline"]
+  ],
+  "adjSynonymSets": [
+    ["big", "large", "huge", "massive"],
+    ["small", "tiny", "little", "compact"],
+    ["quick", "fast", "rapid", "swift"],
+    ["easy", "simple", "straightforward", "effortless"],
+    ["difficult", "hard", "challenging", "tough"],
+    ["important", "crucial", "vital", "essential"],
+    ["good", "great", "excellent", "fantastic"]
+  ],
+  "nounSynonymSets": [
+    ["problem", "issue", "difficulty", "challenge"],
+    ["idea", "concept", "notion", "plan"],
+    ["student", "pupil", "learner"],
+    ["teacher", "instructor", "tutor"],
+    ["goal", "aim", "objective", "target"],
+    ["job", "position", "role", "task"]
+  ],
+  "advSynonymSets": [
+    ["quickly", "rapidly", "swiftly", "promptly"],
+    ["carefully", "cautiously", "thoroughly", "meticulously"],
+    ["easily", "readily", "smoothly", "effortlessly"],
+    ["often", "frequently", "regularly", "commonly"]
+  ],
+  "collocationFamilies": {
+    "decision(N)": { "VERB": ["make", "take", "reach", "form"] },
+    "mistake(N)": { "VERB": ["make", "commit"] },
+    "appointment(N)": { "VERB": ["make", "book", "schedule", "arrange", "cancel"] },
+    "progress(N)": { "VERB": ["make", "achieve"] },
+    "break(N)": { "VERB": ["take", "have"] },
+    "shower(N)": { "VERB": ["take", "have"] },
+    "photo(N)": { "VERB": ["take", "snap", "shoot", "capture"] },
+    "coffee(N)": { "VERB": ["have", "drink", "make", "brew", "order"] },
+    "choice(N)": { "VERB": ["make", "face"] },
+    "effort(N)": { "VERB": ["make", "put in"] },
+    "attention(N)": { "VERB": ["pay", "give", "draw"] },
+    "care(N)": { "VERB": ["take", "give"] }
+  },
+  "timePreps": ["in", "on", "at", "during", "by", "until", "for", "since", "around"],
+  "placePreps": ["in", "on", "at", "under", "over", "between", "behind", "next to", "across", "through"],
+  "anchorHeads": ["decision", "mistake", "appointment", "progress", "break", "shower", "photo", "coffee", "choice", "effort", "attention", "care", "money", "time"],
+  "genericByPOS": {
+    "VERB": ["use", "need", "try", "find", "get", "work", "call", "help"],
+    "NOUN": ["time","work","people","place","thing","day","year","school","city","number"],
+    "ADJ": ["good", "bad", "easy", "difficult", "important"],
+    "ADV": ["often", "usually", "quickly", "carefully"]
+  }
+}

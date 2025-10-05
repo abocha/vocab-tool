@@ -3,11 +3,15 @@ import { createHash, createItemId } from "./id";
 import type {
   ExerciseItem,
   ExerciseType,
+  GapFillHints,
   GapFillItem,
+  GapMode,
   Level,
   MatchingPair,
   McqItem,
   ScrambleItem,
+  GapFillBankMeta,
+  BankQuality,
 } from "../types";
 
 const FILE_MAP: Record<ExerciseType, string> = {
@@ -18,7 +22,7 @@ const FILE_MAP: Record<ExerciseType, string> = {
 };
 
 const REQUIRED_HEADERS: Record<ExerciseType, string[]> = {
-  gapfill: ["level", "type", "prompt", "answer"],
+  gapfill: ["level", "type", "prompt"],
   matching: ["level", "type", "left", "right"],
   mcq: ["type", "prompt", "options", "answer"],
   scramble: ["level", "type", "prompt", "answer"],
@@ -41,6 +45,79 @@ function splitList(value: string): string[] {
     .split("|")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function parseAnswers(primary: string, fallback: string): string[] {
+  const list = splitList(primary);
+  if (list.length > 0) {
+    return list;
+  }
+  const trimmedFallback = fallback.trim();
+  return trimmedFallback ? [trimmedFallback] : [];
+}
+
+function parseGapMode(value: string): GapMode | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "target" || normalized === "collocation" || normalized === "grammar") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function parseHints(value: string): GapFillHints | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const hints: GapFillHints = {};
+  trimmed
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .forEach((entry) => {
+      const separatorIndex = entry.indexOf("=");
+      if (separatorIndex <= 0) {
+        hints[entry] = "";
+        return;
+      }
+      const key = entry.slice(0, separatorIndex).trim();
+      const hintValue = entry.slice(separatorIndex + 1).trim();
+      if (key) {
+        hints[key] = hintValue;
+      }
+    });
+  return Object.keys(hints).length > 0 ? hints : undefined;
+}
+
+function parseBankMeta(value: string): GapFillBankMeta | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+    const tagArray: unknown[] = Array.isArray(parsed.tags) ? parsed.tags : [];
+    const tags = tagArray.filter((tag): tag is string => typeof tag === "string");
+    const meta: GapFillBankMeta = { tags };
+    if (typeof parsed.slot === "string") {
+      meta.slot = parsed.slot;
+    }
+    if (typeof parsed.size === "number") {
+      meta.size = parsed.size;
+    }
+    if (typeof parsed.usedRelax === "boolean") {
+      meta.usedRelax = parsed.usedRelax;
+    }
+    return meta;
+  } catch (error) {
+    return undefined;
+  }
 }
 
 export interface PackIssue {
@@ -120,6 +197,18 @@ function validateHeaders(
       hint: "See docs/03-csv-pack-spec.md for the expected schema.",
     });
   }
+
+  if (type === "gapfill") {
+    const hasAnswer = headerSet.has("answer");
+    const hasAnswers = headerSet.has("answers");
+    if (!hasAnswer && !hasAnswers) {
+      collect.push({
+        severity: "error",
+        message: `${fileName} must include an 'answers' column (or legacy 'answer').`,
+        hint: "Add an answers column per docs/03-csv-pack-spec.md.",
+      });
+    }
+  }
 }
 
 function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssueCollector>): GapFillItem[] {
@@ -135,7 +224,10 @@ function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssue
     }
 
     const prompt = safeString(row.prompt);
-    const answer = safeString(row.answer);
+    const answersRaw = safeString(row.answers);
+    const answerLegacy = safeString(row.answer);
+    const answers = parseAnswers(answersRaw, answerLegacy);
+    const answer = answers[0] ?? "";
     if (!prompt || !answer) {
       collect.push({
         severity: "warning",
@@ -152,12 +244,34 @@ function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssue
       });
     }
 
-    const id = createItemId("gapfill", `${prompt}|${answer}`);
+    const gapMode = parseGapMode(safeString((row as RawRow)["gap_mode"] ?? (row as RawRow)["gapMode"]));
+    const bank = splitList(safeString(row.bank));
+    const hints = parseHints(safeString(row.hints));
+    const bankQualityRaw = safeString((row as RawRow)["bank_quality"] ?? (row as RawRow)["bankQuality"]);
+    const bankQuality = ((): BankQuality | undefined => {
+      const normalized = bankQualityRaw.toLowerCase();
+      if (normalized === "solid" || normalized === "soft" || normalized === "needs_review") {
+        return normalized;
+      }
+      return undefined;
+    })();
+    const bankMeta = parseBankMeta(
+      safeString((row as RawRow)["bank_meta"] ?? (row as RawRow)["bankMeta"]),
+    );
+    const idSeed = `${prompt}|${answer}|${answers.join("|")}`;
+
+    const id = createItemId("gapfill", idSeed);
     items.push({
       id,
       type: "gapfill",
       prompt,
       answer,
+      answers: answers.length > 0 ? answers : undefined,
+      gapMode,
+      bank: bank.length > 0 ? bank : undefined,
+      hints,
+      bankQuality,
+      bankMeta,
       source: safeString(row.source),
       license: safeString(row.license),
       level: levelRaw ? (levelRaw as Level) : undefined,

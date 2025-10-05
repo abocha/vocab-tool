@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createReadStream } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -15,12 +15,159 @@ import {
   isFormulaArtifact,
   normalizeToken,
 } from "./filter-utils.js";
+const confusables = JSON.parse(
+  readFileSync(new URL("./confusables.json", import.meta.url), "utf8"),
+);
 
 const SOURCE_FALLBACK = "simplewiki";
 const LICENSE_FALLBACK = "CC BY-SA";
 const GAPFILL_MIN_LENGTH = 40;
 const GAPFILL_MAX_LENGTH = 120;
+const GAPFILL_BANK_DEFAULT_SIZE = 6;
+const GAPFILL_BANK_MIN = 4;
+const GAPFILL_BANK_MAX = 8;
 const DISTRACTOR_TOLERANCE = 0.3;
+const BANK_DEFAULT_BY_LEVEL = {
+  A1: 4,
+  A2: 6,
+  B1: 7,
+  B2: 8,
+};
+const MIN_BANK_BY_LEVEL = {
+  A1: 4,
+  A2: 5,
+  B1: 6,
+  B2: 6,
+};
+const SOFT_OK_DELTA = 1;
+const MAX_RELAXED_PER_BANK = 1;
+const PACK_DISTRACTOR_COOLDOWN = 20;
+const MAX_BLANKS_BY_LEVEL = {
+  A1: 1,
+  A2: 1,
+  B1: 2,
+  B2: 2,
+};
+const STOPWORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "with",
+  "at",
+  "on",
+  "in",
+  "of",
+  "from",
+  "by",
+  "about",
+  "into",
+  "over",
+  "under",
+  "between",
+  "and",
+  "or",
+  "but",
+]);
+const FUNCTION_WORDS = new Set([
+  ...STOPWORDS,
+  "has",
+  "have",
+  "had",
+  "is",
+  "are",
+  "was",
+  "were",
+  "been",
+  "being",
+  "be",
+  "do",
+  "does",
+  "did",
+  "can",
+  "could",
+  "should",
+  "would",
+  "may",
+  "might",
+  "must",
+  "shall",
+  "will",
+]);
+const TIME_WORDS = new Set([
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+  "today",
+  "tomorrow",
+  "yesterday",
+  "week",
+  "month",
+  "year",
+  "morning",
+  "evening",
+  "night",
+  "noon",
+  "midnight",
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+  "am",
+  "pm",
+  "hour",
+  "minute",
+  "afternoon"
+]);
+const PLACE_WORDS = new Set([
+  "home",
+  "school",
+  "office",
+  "park",
+  "room",
+  "city",
+  "town",
+  "village",
+  "country",
+  "street",
+  "road",
+  "building",
+  "house",
+  "restaurant",
+  "airport",
+  "station",
+  "library",
+  "shop",
+  "store"
+]);
+const MONTH_WORDS = new Set([
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december"
+]);
+const packCooldown = new Map();
 
 function readBooleanOption(options, key, defaultValue) {
   if (!options.has(key)) {
@@ -130,6 +277,769 @@ function deterministicShuffle(items, seed) {
     [result[i], result[j]] = [result[j], result[i]];
   }
   return result;
+}
+
+function clampBankSize(value) {
+  if (!Number.isFinite(value)) {
+    return GAPFILL_BANK_DEFAULT_SIZE;
+  }
+  const rounded = Math.round(value);
+  if (rounded < GAPFILL_BANK_MIN) return GAPFILL_BANK_MIN;
+  if (rounded > GAPFILL_BANK_MAX) return GAPFILL_BANK_MAX;
+  return rounded;
+}
+
+function normalizeTokenLower(value) {
+  return normalizeToken(value).toLowerCase();
+}
+
+function slotSignature(slot) {
+  const parts = [slot.pos];
+  if (slot.morph) parts.push(slot.morph);
+  if (slot.anchor) parts.push(slot.anchor);
+  else if (slot.domain) parts.push(slot.domain);
+  return parts.filter(Boolean).join("|");
+}
+
+function inferSlot(context) {
+  const { answerSurface, answerLemma, tokens, targetIndex, expectedPos, gapMode } = context;
+  const slot = {
+    pos: expectedPos || guessPos(answerSurface),
+    morph: "base",
+    anchor: null,
+    domain: null,
+  };
+
+  const lower = answerSurface.toLowerCase();
+  if (lower.endsWith("ing")) slot.morph = "ing";
+  else if (lower.endsWith("ed")) slot.morph = "ed";
+  else if (lower.endsWith("s") && !lower.endsWith("ss")) slot.morph = "s";
+
+  if (FUNCTION_WORDS.has(lower) || gapMode === "grammar") {
+    slot.pos = "FUNCTION";
+    slot.morph = classifyFunctionWord(answerSurface);
+  }
+
+  const anchorHeads = new Set(confusables.anchorHeads ?? []);
+  const window = 4;
+  let anchor = null;
+  for (let offset = 1; offset <= window; offset += 1) {
+    const forward = tokens[targetIndex + offset];
+    if (forward && anchorHeads.has(forward.surface?.toLowerCase() ?? "")) {
+      anchor = forward.surface.toLowerCase();
+      break;
+    }
+    const backward = tokens[targetIndex - offset];
+    if (backward && anchorHeads.has(backward.surface?.toLowerCase() ?? "")) {
+      anchor = backward.surface.toLowerCase();
+      break;
+    }
+  }
+  if (anchor) {
+    slot.anchor = anchor;
+  }
+
+  if (slot.pos === "FUNCTION" || gapMode === "grammar") {
+    const neighborWords = [];
+    for (let i = Math.max(0, targetIndex - 3); i < Math.min(tokens.length, targetIndex + 4); i += 1) {
+      if (i === targetIndex) continue;
+      const tokenLower = tokens[i]?.surface?.toLowerCase();
+      if (tokenLower) neighborWords.push(tokenLower);
+    }
+    if (neighborWords.some((word) => TIME_WORDS.has(word) || MONTH_WORDS.has(word) || /\d/.test(word))) {
+      slot.domain = "TIME";
+    } else if (neighborWords.some((word) => PLACE_WORDS.has(word))) {
+      slot.domain = "PLACE";
+    }
+  }
+
+  return slot;
+}
+
+function buildLemmaFreqMap(cards) {
+  const map = new Map();
+  for (const card of cards) {
+    if (!card || typeof card.lemma !== "string") continue;
+    const key = card.lemma.toLowerCase();
+    if (!map.has(key)) {
+      map.set(key, typeof card.freq_zipf === "number" ? card.freq_zipf : null);
+    }
+  }
+  return map;
+}
+
+function buildCollocationIndex(cards) {
+  const index = new Map(); // partner -> Map(pos -> Set(lemma))
+  for (const card of cards) {
+    if (!card || typeof card.lemma !== "string") continue;
+    const pos = typeof card.pos === "string" ? card.pos.toUpperCase() : "";
+    const entries = getCollocationEntries(card);
+    for (const entry of entries) {
+      const partner = entry.partner.toLowerCase();
+      if (!index.has(partner)) {
+        index.set(partner, new Map());
+      }
+      const slotMap = index.get(partner);
+      const slotKey = entry.slot ?? pos;
+      const addLemma = (key) => {
+        if (!key) return;
+        if (!slotMap.has(key)) {
+          slotMap.set(key, new Set());
+        }
+        slotMap.get(key).add(card.lemma.toLowerCase());
+      };
+      addLemma(slotKey);
+      addLemma(pos);
+      addLemma("");
+    }
+  }
+  return index;
+}
+
+function getFamilyConfusables(context, slot) {
+  if (!slot.anchor) {
+    return [];
+  }
+  const families = confusables.collocationFamilies ?? {};
+  const key = `${slot.anchor}(N)`;
+  const family = families[key];
+  if (!family) {
+    return [];
+  }
+  const bucket = family[slot.pos] ?? family["VERB"] ?? [];
+  return bucket
+    .filter((lemma) => lemma && lemma.toLowerCase() !== context.answerLemma)
+    .map((lemma) => ({
+      surface: matchCasing(context.answerSurface, lemma),
+      lemma,
+      pos: slot.pos,
+      source: "family",
+      tags: new Set(["family", "colloc"]),
+      group: key,
+    }));
+}
+
+function getDistributionNeighbors(context, collocationIndex) {
+  const candidates = [];
+  context.cardCollocations.forEach((entry) => {
+    const partnerLower = entry.partner.toLowerCase();
+    const slotMap = collocationIndex.get(partnerLower);
+    if (!slotMap) return;
+    const lemmas = slotMap.get(context.expectedPos) ?? slotMap.get("");
+    if (!lemmas) return;
+    lemmas.forEach((lemma) => {
+      if (!lemma || lemma === context.answerLemma) return;
+      const surface = matchCasing(context.answerSurface, lemma);
+      candidates.push({
+        surface,
+        lemma,
+        pos: context.expectedPos,
+        source: "neighbor",
+        tags: new Set(["neighbor"]),
+        group: partnerLower,
+      });
+    });
+  });
+  return candidates;
+}
+
+function relaxOnceIfNeeded(candidates, context, shortage, seed) {
+  if (shortage <= 0) {
+    return { candidates, usedRelaxor: false };
+  }
+
+  const limit = Math.max(0, Math.min(shortage, MAX_RELAXED_PER_BANK));
+  if (limit === 0) {
+    return { candidates, usedRelaxor: false };
+  }
+
+  const relaxedCandidates = [...candidates];
+  const seen = new Set(relaxedCandidates.map((candidate) => candidate.surface.toLowerCase()));
+  let added = 0;
+  let usedRelaxor = false;
+
+  const pushCandidate = (candidate) => {
+    if (!candidate?.surface) return false;
+    if (added >= limit) return false;
+    const key = candidate.surface.toLowerCase();
+    if (seen.has(key)) return false;
+    relaxedCandidates.push(candidate);
+    seen.add(key);
+    added += 1;
+    usedRelaxor = true;
+    return true;
+  };
+
+  if (context.gapMode === "grammar") {
+    const expectedClass = classifyFunctionWord(context.answerSurface);
+    const forms = buildParadigmForms(context.answerLemma)
+      .map((form) => ({
+        surface: matchCasing(context.answerSurface, form),
+        lemma: context.answerLemma,
+        pos: "FUNCTION",
+        source: "relaxed",
+        tags: new Set(["relaxed"]),
+        group: "relaxed",
+      }))
+      .filter((candidate) => {
+        const lower = candidate.surface.toLowerCase();
+        if (lower === context.answerSurface.toLowerCase()) {
+          return false;
+        }
+        return classifyFunctionWord(candidate.surface) === expectedClass;
+      });
+    for (const candidate of forms) {
+      if (pushCandidate(candidate)) {
+        if (added >= limit) break;
+      }
+    }
+  }
+
+  if (added < limit) {
+    const genericList = (confusables.genericByPOS ?? {})[context.expectedPos] ?? [];
+    if (genericList.length > 0) {
+      const ordered = deterministicShuffle(genericList, `${seed}|generic`);
+      for (const pick of ordered) {
+        if (!pick) continue;
+        const lowerPick = pick.toLowerCase();
+        if (lowerPick === context.answerLemma) continue;
+        const candidate = {
+          surface: matchCasing(context.answerSurface, pick),
+          lemma: lowerPick,
+          pos: context.expectedPos,
+          source: "relaxed",
+          tags: new Set(["relaxed", "curated"]),
+          group: "relaxed",
+        };
+        if (pushCandidate(candidate)) {
+          if (added >= limit) break;
+        }
+      }
+    }
+  }
+
+  return { candidates: relaxedCandidates, usedRelaxor };
+}
+
+function sameSetNearDuplicatePenalty(candidate, other) {
+  if (!candidate.group || !other.group) {
+    return 0;
+  }
+  return candidate.group === other.group ? 1 : 0;
+}
+
+function shouldThrottleCandidate(lemma) {
+  const key = lemma.toLowerCase();
+  const count = packCooldown.get(key) ?? 0;
+  return count >= PACK_DISTRACTOR_COOLDOWN;
+}
+
+function updateCooldown(selected) {
+  selected.forEach((candidate) => {
+    const key = candidate.lemma.toLowerCase();
+    const current = packCooldown.get(key) ?? 0;
+    packCooldown.set(key, current + 1);
+  });
+}
+
+function qualityLabel({ bank, tags, usedRelaxor, minSize }) {
+  if (bank.length < minSize - 1) {
+    return "needs_review";
+  }
+  if (bank.length === minSize - 1 || usedRelaxor) {
+    return "soft";
+  }
+  if (!tags.has("family") && !tags.has("colloc") && !tags.has("neighbor")) {
+    return "soft";
+  }
+  return "solid";
+}
+
+function buildParadigmForms(lemma) {
+  const lower = lemma.toLowerCase();
+  const forms = new Set([lower]);
+  if (lower.endsWith("e")) {
+    forms.add(`${lower}d`);
+    forms.add(`${lower.slice(0, -1)}ing`);
+  } else {
+    forms.add(`${lower}ed`);
+    forms.add(`${lower}ing`);
+  }
+  if (lower.endsWith("y")) {
+    forms.add(`${lower.slice(0, -1)}ies`);
+  } else if (lower.endsWith("s")) {
+    forms.add(`${lower}es`);
+  } else {
+    forms.add(`${lower}s`);
+  }
+  return Array.from(forms);
+}
+
+function matchCasing(template, word) {
+  if (!template) return word;
+  if (template === template.toUpperCase()) return word.toUpperCase();
+  if (template[0] === template[0].toUpperCase()) {
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }
+  return word;
+}
+
+function inflectLike(answer, lemma) {
+  const answerLower = answer.toLowerCase();
+  const lemmaLower = lemma.toLowerCase();
+  if (answerLower === lemmaLower) {
+    return matchCasing(answer, lemmaLower);
+  }
+  if (answerLower.endsWith("ing")) {
+    if (lemmaLower.endsWith("e")) {
+      return matchCasing(answer, `${lemmaLower.slice(0, -1)}ing`);
+    }
+    return matchCasing(answer, `${lemmaLower}ing`);
+  }
+  if (answerLower.endsWith("ed")) {
+    if (lemmaLower.endsWith("e")) {
+      return matchCasing(answer, `${lemmaLower}d`);
+    }
+    return matchCasing(answer, `${lemmaLower}ed`);
+  }
+  if (answerLower.endsWith("s")) {
+    if (lemmaLower.endsWith("y")) {
+      return matchCasing(answer, `${lemmaLower.slice(0, -1)}ies`);
+    }
+    if (lemmaLower.endsWith("s") || lemmaLower.endsWith("x") || lemmaLower.endsWith("ch") || lemmaLower.endsWith("sh")) {
+      return matchCasing(answer, `${lemmaLower}es`);
+    }
+    return matchCasing(answer, `${lemmaLower}s`);
+  }
+  return matchCasing(answer, lemmaLower);
+}
+
+function guessPos(word) {
+  const lower = word.toLowerCase();
+  if (lower.endsWith("ly")) return "ADV";
+  if (lower.endsWith("ing") || lower.endsWith("ed")) return "VERB";
+  if (FUNCTION_WORDS.has(lower)) return "FUNCTION";
+  if (lower.endsWith("ous") || lower.endsWith("ful") || lower.endsWith("ive") || lower.endsWith("al")) return "ADJ";
+  return "NOUN";
+}
+
+function classifyFunctionWord(word) {
+  const lower = word.toLowerCase();
+  if (confusables.articles.includes(lower)) return "article";
+  for (const set of confusables.prepositionSets) {
+    if (set.includes(lower)) return "preposition";
+  }
+  if (confusables.auxiliaries.includes(lower)) return "auxiliary";
+  return "function";
+}
+
+function detectGrammarSlot(tokens, targetIndex) {
+  const prev = tokens[targetIndex - 1]?.surface?.toLowerCase() ?? "";
+  const next = tokens[targetIndex + 1]?.surface?.toLowerCase() ?? "";
+  if (prev === "to") return "infinitive";
+  if (["has", "have", "had", "is", "are", "was", "were"].includes(prev)) return "participle";
+  if (next && FUNCTION_WORDS.has(next)) return "preposition";
+  return "function";
+}
+
+function determineGapMode({ answer, card, sentenceLower }) {
+  const answerLower = answer.toLowerCase();
+  if (FUNCTION_WORDS.has(answerLower)) {
+    return "grammar";
+  }
+  const entries = getCollocationEntries(card);
+  for (const entry of entries) {
+    if (entry.partner && sentenceLower.includes(entry.partner.toLowerCase())) {
+      return "collocation";
+    }
+  }
+  return "target";
+}
+
+function generateCollocationConfusables(context, collocationIndex) {
+  const results = [];
+  const partners = new Set();
+  for (const entry of context.cardCollocations) {
+    const partnerLower = entry.partner.toLowerCase();
+    if (context.sentenceLower.includes(partnerLower)) {
+      partners.add(partnerLower);
+    }
+  }
+  partners.forEach((partner) => {
+    const slotMap = collocationIndex.get(partner);
+    if (!slotMap) return;
+    const slotKey = context.expectedPos;
+    const lemmas = slotMap.get(slotKey) ?? slotMap.get("");
+    if (!lemmas) return;
+    lemmas.forEach((lemma) => {
+      if (lemma === context.answerLemma) return;
+      const surface = inflectLike(context.answerSurface, lemma);
+      results.push({
+        surface,
+        lemma,
+        pos: context.expectedPos,
+        source: "collocation",
+        partner,
+        tags: new Set(["colloc"]),
+        group: partner,
+      });
+    });
+  });
+  return results;
+}
+
+function generateParadigmForms(context) {
+  const forms = buildParadigmForms(context.answerLemma);
+  return forms
+    .map((form) => ({
+      surface: matchCasing(context.answerSurface, form),
+      lemma: context.answerLemma,
+      pos: context.expectedPos,
+      source: "paradigm",
+      tags: new Set(["paradigm"]),
+      group: `paradigm:${context.answerLemma}`,
+    }))
+    .filter((candidate) => candidate.surface.toLowerCase() !== context.answerNormalized);
+}
+
+function generateCuratedConfusables(context) {
+  const results = [];
+  const answerLower = context.answerLemma;
+  const seen = new Set();
+
+  const pushCandidate = (word, { pos, group, tags = [] } = {}) => {
+    if (!word) return;
+    const lower = word.toLowerCase();
+    if (lower === answerLower) return;
+    if (seen.has(lower)) return;
+    seen.add(lower);
+    const tagSet = new Set(["curated"]);
+    tags.forEach((tag) => tagSet.add(tag));
+    results.push({
+      surface: matchCasing(context.answerSurface, word),
+      lemma: lower,
+      pos: pos ?? context.expectedPos,
+      source: "curated",
+      tags: tagSet,
+      group: group ?? `curated:${context.expectedPos ?? "misc"}`,
+    });
+  };
+
+  if (context.gapMode === "grammar") {
+    const slotInfo = context.slot;
+    if (slotInfo?.domain === "TIME" && Array.isArray(confusables.timePreps)) {
+      confusables.timePreps.forEach((word) =>
+        pushCandidate(word, { pos: "FUNCTION", group: "curated:time-preps", tags: ["domain:time"] }),
+      );
+    }
+    if (slotInfo?.domain === "PLACE" && Array.isArray(confusables.placePreps)) {
+      confusables.placePreps.forEach((word) =>
+        pushCandidate(word, { pos: "FUNCTION", group: "curated:place-preps", tags: ["domain:place"] }),
+      );
+    }
+
+    for (const set of confusables.prepositionSets) {
+      if (!Array.isArray(set)) continue;
+      if (!set.includes(answerLower)) continue;
+      set.forEach((word) => pushCandidate(word, { pos: "FUNCTION", group: "curated:prep-set" }));
+    }
+
+    if (Array.isArray(confusables.articles) && confusables.articles.includes(answerLower)) {
+      confusables.articles.forEach((word) => pushCandidate(word, { pos: "FUNCTION", group: "curated:articles" }));
+    }
+
+    if (Array.isArray(confusables.auxiliaries) && confusables.auxiliaries.includes(answerLower)) {
+      confusables.auxiliaries.forEach((word) => pushCandidate(word, { pos: "FUNCTION", group: "curated:aux" }));
+    }
+
+    return results;
+  }
+
+  const synonymSets = {
+    VERB: confusables.verbSynonymSets,
+    ADJ: confusables.adjSynonymSets,
+    NOUN: confusables.nounSynonymSets,
+    ADV: confusables.advSynonymSets,
+  };
+  const sets = synonymSets[context.expectedPos] ?? [];
+  sets.forEach((set, index) => {
+    if (!Array.isArray(set)) return;
+    if (!set.includes(answerLower)) return;
+    set.forEach((word) => pushCandidate(word, { pos: context.expectedPos, group: `curated:${context.expectedPos}:${index}` }));
+  });
+
+  if (context.expectedPos === "VERB") {
+    confusables.lightVerbs.forEach((word) => pushCandidate(word, { pos: "VERB", group: "light-verbs" }));
+  }
+
+  return results;
+}
+
+function fitsPosMorph(candidate, context) {
+  if (context.gapMode === "grammar") {
+    const expectedClass = classifyFunctionWord(context.answerSurface);
+    return classifyFunctionWord(candidate.surface) === expectedClass;
+  }
+  if (context.expectedPos && candidate.pos && context.expectedPos !== candidate.pos) {
+    return false;
+  }
+  if (context.expectedPos === "VERB") {
+    const answerLower = context.answerSurface.toLowerCase();
+    const candLower = candidate.surface.toLowerCase();
+    if (answerLower.endsWith("ing")) return candLower.endsWith("ing");
+    if (answerLower.endsWith("ed")) return candLower.endsWith("ed");
+    if (answerLower.endsWith("s")) return candLower.endsWith("s");
+  }
+  return true;
+}
+
+function passesStopwordRule(candidate, context) {
+  const lower = candidate.surface.toLowerCase();
+  if (context.gapMode === "grammar") {
+    return true;
+  }
+  return !STOPWORDS.has(lower);
+}
+
+function appearsInPrompt(candidate, context) {
+  const lower = candidate.surface.toLowerCase();
+  return context.promptLower.includes(` ${lower} `);
+}
+
+function isSameLemmaVariant(candidate, context) {
+  return candidate.lemma.toLowerCase() === context.answerLemma;
+}
+
+function scoreCandidate(candidate, context, slot, collocationIndex, lemmaFreqMap) {
+  let score = 0;
+  if (candidate.tags?.has("family")) {
+    score += 4;
+  }
+  if (candidate.tags?.has("colloc")) {
+    score += 4;
+  }
+  if (slot.anchor && candidate.tags?.has("family")) {
+    score += 1;
+  }
+  if (candidate.tags?.has("neighbor")) {
+    score += 3;
+  }
+  if (candidate.tags?.has("paradigm")) {
+    score += 2;
+  }
+  if (candidate.tags?.has("curated")) {
+    score += 1;
+  }
+
+  // POS/morph confidence (binary after filters)
+  score += 2;
+
+  const answerFreq = context.answerFreq;
+  const candidateFreq = lemmaFreqMap.get(candidate.lemma.toLowerCase());
+  if (answerFreq != null && candidateFreq != null) {
+    const diff = Math.abs(answerFreq - candidateFreq);
+    score += Math.max(0, 1 - Math.min(diff / 2, 1));
+  }
+
+  const lev = levenshteinDistance(candidate.surface.toLowerCase(), context.answerSurface.toLowerCase());
+  if (lev > 0 && lev <= 2) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function tieBreak(candidate, seed) {
+  return deterministicHash(`${seed}|${candidate.surface.toLowerCase()}`);
+}
+
+function selectDiversifiedCandidates(candidates, limit, context, seed) {
+  const selected = [];
+  const lemmaSeen = new Set();
+  const groupCounts = new Map();
+  const sourceCounts = new Map();
+
+  for (const item of candidates) {
+    const candidate = item.candidate;
+    const lemma = candidate.lemma.toLowerCase();
+    if (context.gapMode !== "grammar" && lemmaSeen.has(lemma)) {
+      continue;
+    }
+    const groupKey = candidate.group ?? `${candidate.source ?? "misc"}`;
+    if (context.gapMode !== "grammar" && (groupCounts.get(groupKey) ?? 0) >= 1) {
+      continue;
+    }
+    const sourceKey = candidate.source ?? "misc";
+    if ((sourceCounts.get(sourceKey) ?? 0) >= 2) {
+      continue;
+    }
+    selected.push(candidate);
+    lemmaSeen.add(lemma);
+    groupCounts.set(groupKey, (groupCounts.get(groupKey) ?? 0) + 1);
+    sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1);
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  if (selected.length < limit) {
+    const remaining = candidates
+      .filter((item) => !selected.includes(item.candidate))
+      .sort((a, b) => tieBreak(a.candidate, `${seed}|fallback`) - tieBreak(b.candidate, `${seed}|fallback`));
+    for (const item of remaining) {
+      selected.push(item.candidate);
+      if (selected.length >= limit) break;
+    }
+  }
+
+  return selected;
+}
+
+function buildSmartBank(context, collocationIndex, lemmaFreqMap, bankSize, seed) {
+  const slot = inferSlot(context);
+  context.slot = slot;
+  const minBankSize = MIN_BANK_BY_LEVEL[context.level] ?? GAPFILL_BANK_MIN;
+  const answerLower = context.answerSurface.toLowerCase();
+  const candidateMap = new Map();
+
+  const addCandidate = (candidate) => {
+    const key = candidate.surface.toLowerCase();
+    if (!key || key === answerLower) return;
+    if (candidateMap.has(key)) return;
+    const lemmaKey = (candidate.lemma ?? candidate.surface).toLowerCase();
+    if (shouldThrottleCandidate(lemmaKey)) return;
+    candidate.lemma = lemmaKey;
+    candidate.pos = candidate.pos || guessPos(candidate.surface);
+    candidate.tags = candidate.tags ?? new Set();
+    candidate.group = candidate.group ?? `${candidate.source ?? "misc"}`;
+    candidateMap.set(key, candidate);
+  };
+
+  getFamilyConfusables(context, slot).forEach(addCandidate);
+  generateCollocationConfusables(context, collocationIndex).forEach(addCandidate);
+  getDistributionNeighbors(context, collocationIndex).forEach(addCandidate);
+  if (context.allowParadigm) {
+    generateParadigmForms(context).forEach(addCandidate);
+  }
+  generateCuratedConfusables(context).forEach(addCandidate);
+
+  let initialCandidates = Array.from(candidateMap.values()).filter((candidate) =>
+    fitsPosMorph(candidate, context) &&
+    passesStopwordRule(candidate, context) &&
+    !appearsInPrompt(candidate, context) &&
+    !isSameLemmaVariant(candidate, context),
+  );
+
+  const neededDistractors = Math.max(bankSize - 1 - initialCandidates.length, 0);
+  let usedRelaxor = false;
+  if (neededDistractors > 0) {
+    const relaxed = relaxOnceIfNeeded(initialCandidates, context, neededDistractors, seed);
+    if (relaxed.usedRelaxor) {
+      initialCandidates = relaxed.candidates.filter((candidate) =>
+        fitsPosMorph(candidate, context) &&
+        passesStopwordRule(candidate, context) &&
+        !appearsInPrompt(candidate, context) &&
+        !isSameLemmaVariant(candidate, context),
+      );
+    } else {
+      initialCandidates = relaxed.candidates;
+    }
+    usedRelaxor = relaxed.usedRelaxor;
+  }
+
+  const scored = initialCandidates
+    .map((candidate) => ({
+      candidate,
+      score: scoreCandidate(candidate, context, slot, collocationIndex, lemmaFreqMap),
+      tie: tieBreak(candidate, seed),
+    }))
+    .sort((a, b) => {
+      if (b.score === a.score) {
+        return a.tie - b.tie;
+      }
+      return b.score - a.score;
+    });
+
+  const selected = selectDiversifiedCandidates(scored, Math.max(bankSize - 1, 1), context, seed);
+  const surfaces = selected.map((candidate) => candidate.surface);
+  const unique = [context.answerSurface, ...surfaces];
+  const deduped = [];
+  const seen = new Set();
+  for (const value of unique) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(value);
+    if (deduped.length >= bankSize) break;
+  }
+
+  updateCooldown(selected);
+
+  const tags = new Set();
+  selected.forEach((candidate) => candidate.tags?.forEach((tag) => tags.add(tag)));
+  if (usedRelaxor) {
+    tags.add("relaxed");
+  }
+  const tagList = Array.from(tags.values()).sort();
+  const quality = qualityLabel({
+    bank: deduped,
+    tags,
+    usedRelaxor,
+    minSize: minBankSize,
+  });
+
+  const meta = {
+    tags: tagList,
+    slot: slotSignature(slot),
+    size: deduped.length,
+    usedRelax: usedRelaxor,
+  };
+
+  return { bank: deduped, quality, meta };
+}
+
+function getCollocationEntries(card) {
+  if (!card) return [];
+  const entries = [];
+  const source = card.collocations;
+  if (Array.isArray(source)) {
+    for (const entry of source) {
+      if (!entry) continue;
+      const partner = typeof entry.partner === "string" ? entry.partner.trim() : "";
+      if (!partner) continue;
+      entries.push({
+        anchor: typeof entry.anchor === "string" && entry.anchor ? entry.anchor : card.lemma,
+        partner,
+        score: typeof entry.score === "number" ? entry.score : null,
+        slot:
+          typeof entry.slot === "string"
+            ? entry.slot.toUpperCase()
+            : typeof card.pos === "string"
+              ? card.pos.toUpperCase()
+              : "",
+      });
+    }
+    return entries;
+  }
+
+  if (source && typeof source === "object") {
+    for (const value of Object.values(source)) {
+      if (!Array.isArray(value)) continue;
+      for (const partner of value) {
+        if (typeof partner !== "string") continue;
+        const trimmed = partner.trim();
+        if (!trimmed) continue;
+        entries.push({
+          anchor: card.lemma,
+          partner: trimmed,
+          score: null,
+          slot: typeof card.pos === "string" ? card.pos.toUpperCase() : "",
+        });
+      }
+    }
+  }
+
+  return entries;
 }
 
 function evaluateSurface({ surface, tokens, index, sentence, filterConfig, dropSummary }) {
@@ -257,7 +1167,20 @@ async function loadCards(filePath) {
   return cards;
 }
 
-function buildGapfillRows({ cards, level, limit, filterConfig }) {
+function countBlanks(prompt) {
+  return (prompt.match(/_____/g) ?? []).length;
+}
+
+function buildGapfillRows({
+  cards,
+  level,
+  limit,
+  filterConfig,
+  collocationIndex,
+  lemmaFreqMap,
+  maxBlanksPerSentence,
+}) {
+  packCooldown.clear();
   const rows = [];
   const seenPrompts = new Set();
   const stats = {
@@ -305,13 +1228,14 @@ function buildGapfillRows({ cards, level, limit, filterConfig }) {
       continue;
     }
 
-    const unsafeReason = checkUnsafeText(cloze.sentence ?? card.examples[0], filterConfig, dropSummary);
+    const originalSentence = cloze.sentence ?? card.examples[0] ?? "";
+    const unsafeReason = checkUnsafeText(originalSentence, filterConfig, dropSummary);
     if (unsafeReason) {
       stats.filteredByGuards += 1;
       continue;
     }
 
-    const tokens = cloze.tokens ?? tokenizeSentence(cloze.sentence ?? card.examples[0]);
+    const tokens = cloze.tokens ?? tokenizeSentence(originalSentence);
     let targetIndex = cloze.targetIndex ?? -1;
     if (targetIndex < 0) {
       const lowerAnswer = cloze.answer.toLowerCase();
@@ -322,7 +1246,7 @@ function buildGapfillRows({ cards, level, limit, filterConfig }) {
       surface: cloze.answer,
       tokens,
       index: targetIndex >= 0 ? targetIndex : 0,
-      sentence: cloze.sentence ?? card.examples[0],
+      sentence: originalSentence,
       filterConfig,
       dropSummary,
     });
@@ -338,19 +1262,75 @@ function buildGapfillRows({ cards, level, limit, filterConfig }) {
     }
 
     const normalized = normalizePrompt(cloze.prompt);
+    const blanksCount = countBlanks(cloze.prompt);
+    if (maxBlanksPerSentence && blanksCount > maxBlanksPerSentence) {
+      continue;
+    }
     if (seenPrompts.has(normalized)) {
       stats.droppedDuplicate += 1;
       continue;
     }
 
     seenPrompts.add(normalized);
+    const answers = [cloze.answer];
+    const sentenceLower = ` ${originalSentence.toLowerCase()} `;
+    const promptLower = ` ${cloze.prompt.toLowerCase()} `;
+    const gapMode = determineGapMode({ answer: cloze.answer, card, sentenceLower });
+    const expectedPos = typeof card.pos === "string" ? card.pos.toUpperCase() : guessPos(cloze.answer);
+    const answerLemma = (typeof card.lemma === "string" ? card.lemma : cloze.answer).toLowerCase();
+    const bankSeed = `gapfill|bank|${card.lemma}|${normalized}`;
+    const desiredBankSize = clampBankSize(BANK_DEFAULT_BY_LEVEL[level] ?? GAPFILL_BANK_DEFAULT_SIZE);
+    const context = {
+      answerSurface: cloze.answer,
+      answerLemma,
+      answerNormalized: normalizeToken(cloze.answer),
+      answerFreq: lemmaFreqMap.get(answerLemma) ?? null,
+      expectedPos,
+      gapMode,
+      tokens,
+      targetIndex: targetIndex >= 0 ? targetIndex : 0,
+      sentenceLower,
+      promptLower,
+      cardCollocations: getCollocationEntries(card),
+      allowParadigm: gapMode === "grammar" || expectedPos === "VERB",
+      blanksCount,
+      maxBlanksPerSentence,
+      level,
+    };
+    const { bank, quality, meta } = buildSmartBank(
+      context,
+      collocationIndex,
+      lemmaFreqMap,
+      desiredBankSize,
+      bankSeed,
+    );
+
+    const hintsParts = [];
+    const initialHint = cloze.answer.charAt(0);
+    if (initialHint) {
+      hintsParts.push(`first=${initialHint}`);
+    }
+    if (card.pos) {
+      hintsParts.push(`pos=${card.pos}`);
+    }
+    const collocationCue = context.cardCollocations.find((entry) => entry.partner)?.partner;
+    if (collocationCue) {
+      hintsParts.push(`cue=${collocationCue}`);
+    }
+
     rows.push([
       level,
       "gapfill",
       cloze.prompt,
+      answers.join("|"),
       cloze.answer,
       card.source ?? SOURCE_FALLBACK,
       card.license ?? LICENSE_FALLBACK,
+      gapMode,
+      bank.join("|"),
+      hintsParts.join(";"),
+      quality,
+      JSON.stringify(meta),
     ]);
     stats.emitted += 1;
     if (limit && rows.length >= limit) break;
@@ -374,21 +1354,31 @@ function buildMatchingRows({ cards, level, limit, filterConfig }) {
   let cardsWithoutPairs = 0;
 
   for (const card of cards) {
-    if (!card || typeof card.lemma !== "string" || typeof card.collocations !== "object" || card.collocations === null) {
+    if (!card || typeof card.lemma !== "string") {
       continue;
     }
     const lemma = card.lemma;
-    const bucket = lemmaBuckets.get(lemma) ?? [];
-    const seenValues = new Set(bucket.map((candidate) => candidate.value));
-    for (const collocs of Object.values(card.collocations)) {
-      if (!Array.isArray(collocs)) continue;
-      for (const raw of collocs) {
-        const value = raw?.trim();
-        if (!value || seenValues.has(value)) continue;
-        seenValues.add(value);
-        bucket.push({ value, source: card.source ?? SOURCE_FALLBACK, license: card.license ?? LICENSE_FALLBACK });
-      }
+    const entries = getCollocationEntries(card);
+    if (entries.length === 0) {
+      cardsWithoutPairs += 1;
+      continue;
     }
+
+    const bucket = lemmaBuckets.get(lemma) ?? [];
+    const seenValues = new Set(bucket.map((candidate) => candidate.value.toLowerCase()));
+    for (const entry of entries) {
+      const value = typeof entry.partner === "string" ? entry.partner.trim() : "";
+      if (!value) continue;
+      const normalized = value.toLowerCase();
+      if (seenValues.has(normalized)) continue;
+      seenValues.add(normalized);
+      bucket.push({
+        value,
+        source: card.source ?? SOURCE_FALLBACK,
+        license: card.license ?? LICENSE_FALLBACK,
+      });
+    }
+
     if (bucket.length > 0) {
       lemmaBuckets.set(lemma, bucket);
     } else {
@@ -691,6 +1681,69 @@ function buildMcqRows({ cards, limit, filterConfig }) {
   return { rows, stats, dropSummary };
 }
 
+function buildScrambleRows({ cards, level, limit, filterConfig }) {
+  const rows = [];
+  const stats = {
+    emitted: 0,
+    skippedShort: 0,
+    filteredByGuards: 0,
+    droppedDuplicate: 0,
+  };
+  const dropSummary = {};
+  const seenPrompts = new Set();
+
+  outer: for (const card of cards) {
+    if (!Array.isArray(card.examples) || card.examples.length === 0) {
+      continue;
+    }
+    for (let exampleIndex = 0; exampleIndex < card.examples.length; exampleIndex += 1) {
+      const sentence = card.examples[exampleIndex];
+      if (!sentence || typeof sentence !== "string") {
+        continue;
+      }
+      const trimmed = sentence.trim();
+      if (trimmed.length < GAPFILL_MIN_LENGTH) {
+        stats.skippedShort += 1;
+        continue;
+      }
+      const unsafe = checkUnsafeText(trimmed, filterConfig, dropSummary);
+      if (unsafe) {
+        stats.filteredByGuards += 1;
+        continue;
+      }
+      const tokens = tokenizeSentence(trimmed);
+      if (!Array.isArray(tokens) || tokens.length < 4) {
+        stats.skippedShort += 1;
+        continue;
+      }
+      const surfaces = tokens.map((token) => token.surface);
+      const seed = `scramble|${level}|${card.lemma}|${exampleIndex}`;
+      const shuffled = deterministicShuffle(surfaces, seed);
+      const prompt = shuffled.join(" ");
+      const normalized = normalizePrompt(prompt);
+      if (seenPrompts.has(normalized)) {
+        stats.droppedDuplicate += 1;
+        continue;
+      }
+      seenPrompts.add(normalized);
+      rows.push([
+        level,
+        "scramble",
+        prompt,
+        trimmed,
+        card.source ?? SOURCE_FALLBACK,
+        card.license ?? LICENSE_FALLBACK,
+      ]);
+      stats.emitted += 1;
+      if (limit && rows.length >= limit) {
+        break outer;
+      }
+    }
+  }
+
+  return { rows, stats, dropSummary };
+}
+
 function csvEscape(value) {
   if (value == null) return "";
   const str = String(value);
@@ -708,13 +1761,14 @@ async function writeCsv(filePath, header, rows) {
   await fs.writeFile(filePath, `${bom}${lines.join("\n")}\n`, "utf8");
 }
 
-function logSummary({ gapfill, matching, mcq, outputDir }, extras = {}) {
+function logSummary({ gapfill, matching, mcq, scramble, outputDir }, extras = {}) {
   const summary = {
     task: "cards-to-packs",
     outputDir,
     gapfill,
     matching,
     mcq,
+    scramble,
   };
   Object.assign(summary, extras);
   console.log(JSON.stringify(summary, null, 2));
@@ -733,6 +1787,7 @@ async function main() {
   const limitGapfill = toNumber(opts.get("--limitGapfill")) ?? 0;
   const limitMatching = toNumber(opts.get("--limitMatching")) ?? 0;
   const limitMcq = toNumber(opts.get("--limitMcq")) ?? 0;
+  const limitScramble = toNumber(opts.get("--limitScramble")) ?? 0;
   const sfwLevelRaw = opts.get("--sfwLevel") ? String(opts.get("--sfwLevel")).toLowerCase() : null;
   const sfwFlag = readBooleanOption(opts, "--sfw", true);
   let sfwLevel = sfwLevelRaw;
@@ -780,6 +1835,7 @@ async function main() {
         limitGapfill: limitGapfill || null,
         limitMatching: limitMatching || null,
         limitMcq: limitMcq || null,
+        limitScramble: limitScramble || null,
         sfw,
         sfwLevel,
         dropProperNouns,
@@ -792,13 +1848,37 @@ async function main() {
 
   const cards = await loadCards(cardsPath);
 
+  const lemmaFreqMap = buildLemmaFreqMap(cards);
+  const collocationIndex = buildCollocationIndex(cards);
+
   const combinedDropSummary = {};
 
-  const gapfill = buildGapfillRows({ cards, level, limit: limitGapfill, filterConfig });
+  const gapfill = buildGapfillRows({
+    cards,
+    level,
+    limit: limitGapfill,
+    filterConfig,
+    collocationIndex,
+    lemmaFreqMap,
+    maxBlanksPerSentence: MAX_BLANKS_BY_LEVEL[level] ?? 2,
+  });
   mergeDropSummaries(combinedDropSummary, gapfill.dropSummary);
   await writeCsv(
     path.join(outDir, "gapfill.csv"),
-    ["level", "type", "prompt", "answer", "source", "license"],
+    [
+      "level",
+      "type",
+      "prompt",
+      "answers",
+      "answer",
+      "source",
+      "license",
+      "gap_mode",
+      "bank",
+      "hints",
+      "bank_quality",
+      "bank_meta",
+    ],
     gapfill.rows,
   );
 
@@ -818,16 +1898,26 @@ async function main() {
     mcq.rows,
   );
 
+  const scramble = buildScrambleRows({ cards, level, limit: limitScramble, filterConfig });
+  mergeDropSummaries(combinedDropSummary, scramble.dropSummary);
+  await writeCsv(
+    path.join(outDir, "scramble.csv"),
+    ["level", "type", "prompt", "answer", "source", "license"],
+    scramble.rows,
+  );
+
   const summaryExtras = buildSummaryFragment(combinedDropSummary);
   summaryExtras.sfwLevel = filterConfig.sfwLevel;
   summaryExtras.matchingMode = "pair";
   summaryExtras.pairsEmitted = matching.stats.pairsEmitted;
   summaryExtras.pairsFilteredByGuards = matching.stats.pairsFilteredByGuards;
+  summaryExtras.scrambleEmitted = scramble.stats.emitted;
 
   logSummary({
     gapfill: gapfill.stats,
     matching: matching.stats,
     mcq: mcq.stats,
+    scramble: scramble.stats,
     outputDir: outDir,
   }, summaryExtras);
 }

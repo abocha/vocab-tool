@@ -5,7 +5,7 @@ import {
   compileInspectorRegex,
   MAX_REGEX_PATTERN_LENGTH,
 } from "./inspector";
-import type { ExerciseItem, InspectorFilters } from "../types";
+import type { ExerciseItem, GapFillInspectorControls, InspectorFilters } from "../types";
 
 describe("compileInspectorRegex", () => {
   it("creates a case-insensitive regex for valid patterns", () => {
@@ -39,6 +39,9 @@ describe("applyInspectorFilters", () => {
       type: "gapfill",
       prompt: "The cat _____ on the mat",
       answer: "sat",
+      gapMode: "target",
+      bankQuality: "soft",
+      bankMeta: { tags: ["curated"], slot: "VERB|base|cat" },
     },
     {
       id: "matching-1",
@@ -64,6 +67,8 @@ describe("applyInspectorFilters", () => {
     minLength: null,
     maxLength: null,
     regex: "",
+    bankQuality: "all",
+    relaxedOnly: false,
   };
 
   it("filters by minimum length and hides selected ids", () => {
@@ -83,12 +88,72 @@ describe("applyInspectorFilters", () => {
     expect(result[0]?.id).toBe("matching-1");
   });
 
+  it("filters gap-fill items using gap controls", () => {
+    const enriched: ExerciseItem[] = [
+      ...sampleItems,
+      {
+        id: "gapfill-2",
+        type: "gapfill",
+        prompt: "She likes _____ coffee and _____ tea.",
+        answer: "strong",
+        answers: ["strong"],
+        gapMode: "collocation",
+        bankQuality: "needs_review",
+        bankMeta: { tags: ["relaxed"], slot: "VERB|base|coffee", usedRelax: true },
+      },
+    ];
+    const controls: GapFillInspectorControls = {
+      mode: "collocation",
+      bankSize: 6,
+      hints: { initialLetter: false, pos: false, collocationCue: false, tts: false },
+      difficulty: "A2",
+      maxBlanksPerSentence: 1,
+    };
+
+    const filtered = applyInspectorFilters(enriched, baseFilters, new Set(), { gapFill: controls });
+    expect(filtered.some((item) => item.id === "gapfill-2")).toBe(false);
+
+    const relaxed = applyInspectorFilters(enriched, baseFilters, new Set(), {
+      gapFill: { ...controls, maxBlanksPerSentence: 2 },
+    });
+    expect(relaxed.some((item) => item.id === "gapfill-2")).toBe(true);
+  });
+
   it("ignores regex filtering if the pattern is invalid", () => {
     const filters = { ...baseFilters, regex: "[" };
     const { regex } = compileInspectorRegex(filters.regex);
     const result = applyInspectorFilters(sampleItems, filters, new Set(), { regex });
 
     expect(result).toHaveLength(sampleItems.length);
+  });
+
+  it("filters gap fills by bank quality", () => {
+    const filters = { ...baseFilters, bankQuality: "soft" as const };
+    const result = applyInspectorFilters(sampleItems, filters, new Set());
+    expect(result.map((item) => item.id)).toEqual(["gapfill-1"]);
+
+    const stricter = { ...baseFilters, bankQuality: "needs_review" as const };
+    const resultStrict = applyInspectorFilters(sampleItems, stricter, new Set());
+    expect(resultStrict).toHaveLength(0);
+  });
+
+  it("filters gap fills by relaxed tag", () => {
+    const enriched: ExerciseItem[] = [
+      ...sampleItems,
+      {
+        id: "gapfill-2",
+        type: "gapfill",
+        prompt: "She likes _____ coffee and _____ tea.",
+        answer: "strong",
+        answers: ["strong"],
+        gapMode: "collocation",
+        bankQuality: "needs_review",
+        bankMeta: { tags: ["relaxed"], slot: "VERB|base|coffee", usedRelax: true },
+      },
+    ];
+    const filters = { ...baseFilters, relaxedOnly: true };
+    const result = applyInspectorFilters(enriched, filters, new Set());
+    expect(result.map((item) => item.id)).toEqual(["gapfill-2"]);
   });
 });
 
@@ -154,5 +219,40 @@ describe("buildHtmlExport", () => {
     expect(html).toContain("class=\"answer-blank\"");
     expect(html).toContain("<span class=\"option-letter\">A.</span> dog");
     expect(html).toContain("matching-table--answers");
+  });
+
+  it("includes gap-fill word banks and hints when controls are supplied", () => {
+    const items: ExerciseItem[] = [
+      {
+        id: "gapfill-hints",
+        type: "gapfill",
+        prompt: "Every morning I _____ coffee.",
+        answer: "drink",
+        answers: ["drink"],
+        bank: ["drink", "eat", "sleep", "read"],
+        hints: { first: "d", pos: "VERB", cue: "coffee" },
+      },
+    ];
+
+    const exportData = buildHtmlExport(items, "gapfill", "A2", {
+      gapFill: {
+        mode: "target",
+        bankSize: 6,
+        hints: {
+          initialLetter: true,
+          pos: true,
+          collocationCue: true,
+          tts: false,
+        },
+        difficulty: "A2",
+        maxBlanksPerSentence: 1,
+      },
+    });
+
+    expect(exportData).not.toBeNull();
+    const html = exportData?.html ?? "";
+    expect(html).toContain("gapfill-bank");
+    expect(html).toContain("Starts with");
+    expect(html).toContain("Collocation cue");
   });
 });
