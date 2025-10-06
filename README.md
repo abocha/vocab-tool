@@ -44,7 +44,7 @@ Each CSV must include the headers defined by the corpus pipeline (see `/docs/03-
 ### Matching data shape
 
 - **Canonical CSV:** one pair per row (`level,type,left,right,source,license,count`). Sets are formed in the UI at render time.
-- **Legacy CSVs:** set-per-row files still load, but every legacy row triggers a banner (`deprecated_set_per_row`) and the validator warns unless converted. Use `npm run packs:convert:matching` to rewrite old packs into the canonical format.
+- **Matching data shape:** every row must be a single pair (`left,right`). Rows containing multiple pipe-separated items are rejected. Use `npm run packs:convert:matching` to migrate legacy set-per-row files before loading them.
 - **Deterministic grouping:** the Matching view shuffles pairs with a stable seed (`matching|<file>|<level>|<pairCount>`). Supply `?seed=<value>` for reproducible sessions; the TopBar shows a copyable badge when a seed override is active.
 - **Pairs per Set control:** numeric input (2–12, default 6) stored in `localStorage` (`matching.setSize`). A `?set=<value>` query parameter overrides the stored value for the current session.
 - **Diagnostics:** inspector summaries highlight duplicate pairs, legacy rows, and other loader warnings with representative samples when available.
@@ -66,6 +66,12 @@ Flags:
 ## Phase 2: Cards & Builders
 
 The Phase 2 pipeline turns the SimpleWiki corpus into reusable cards and then emits exercise CSVs that match the existing UI contracts. All steps are deterministic for the same inputs so regenerated packs remain diff-friendly.
+
+### Current Highlights (2025-03)
+
+- **Smart Bank v1.1**: gap-fill banks now use slot-aware candidate staging, with telemetry showing distractor sources and bank sizes. A2/B1 short-bank counts are <25.
+- **Scramble hygiene**: numeric-heavy sentences are filtered before shuffling, so answers no longer reveal hidden numbers.
+- **Validator telemetry**: `npm run packs:validate` reports bank tag mix, relaxed usage, and size histograms to catch regressions quickly.
 
 ```bash
 # 1) Derive draft cards (examples + collocations) for a level
@@ -100,17 +106,18 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 
 ## Available Scripts
 
+For the full CLI option reference (including safety filters and presets) see
+`docs/16-cli-reference.md`.
+
 - `npm run dev` — start the dev server.
 - `npm run build` — type-check and produce a static build in `dist/`.
 - `npm run preview` — preview the production build locally.
+- `npm run lint` — run ESLint across the project.
 - `npm run prepare:packs` — copy/sample CSV packs (see above).
-- `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (examples, collocations, frequency metadata).
-- `npm run cards:filter` — regenerate cards with the default safety filters.
-- `npm run cards:filter:strict` — regenerate cards with the school-safe profile.
-- `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards.
-- `npm run packs:from-cards:matching` — build just the matching CSV (pair-per-row) for the requested level.
-- `npm run packs:from-cards:safe` — build packs with the default guards.
-- `npm run packs:from-cards:strict` — build packs with the school-safe profile.
+- `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (defaults to `--level A2`).
+- `npm run cards:draft:strict` — convenience wrapper for `cards:draft` with the school-safe guard profile.
+- `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards (defaults to `--level A2`).
+- `npm run packs:from-cards:strict` — convenience wrapper for `packs:from-cards` with strict safety guards.
 - `npm run packs:validate` — run the pack validator summary over one or more levels.
 - `npm run packs:validate:strict` — validator in school-safe mode with strict exit on guard hits.
 - `npm run packs:convert:matching` — convert a legacy set-per-row matching CSV into the canonical pair-per-row format.
@@ -118,7 +125,7 @@ The top-of-page banner also surfaces parse warnings and errors (missing columns,
 
 ### SFW Profiles
 
-All build/validate CLIs accept `--sfwLevel` (or the legacy `--sfw` boolean) to control the guardrails:
+All build/validate CLIs accept `--sfwLevel` to control the guardrails:
 
 ```bash
 # School-safe (sexual vocabulary removed unless allow-listed)

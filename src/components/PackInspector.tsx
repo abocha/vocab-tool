@@ -18,6 +18,7 @@ import {
   itemToPlainText,
   MAX_REGEX_PATTERN_LENGTH,
 } from "../lib/inspector";
+import type { PresetSummary } from "../lib/preset-library";
 
 const TYPE_LABELS: Record<ExerciseType, string> = {
   gapfill: "Gap Fill",
@@ -94,6 +95,13 @@ interface PackInspectorProps {
   onApplyPreset: (id: string) => void;
   onDuplicatePreset: (id: string) => void;
   onDeletePreset: (id: string) => void;
+  libraryPresets: PresetSummary[];
+  activeLibraryPresetId: string | null;
+  onApplyLibraryPresetFromLibrary: (id: string) => void;
+  libraryMeta?: {
+    libraryVersion: number;
+    updated?: string;
+  };
 }
 
 function formatItemSummary(item: ExerciseItem): string {
@@ -172,6 +180,10 @@ export function PackInspector({
   onApplyPreset,
   onDuplicatePreset,
   onDeletePreset,
+  libraryPresets,
+  activeLibraryPresetId,
+  onApplyLibraryPresetFromLibrary,
+  libraryMeta,
 }: PackInspectorProps) {
 
   const hiddenItems = useMemo(
@@ -305,7 +317,7 @@ export function PackInspector({
   const visibleCount = visibleItems.length;
   const filteredOutCount = Math.max(0, allItems.length - filteredCount);
   const matchingSummary = matchingDiagnostics
-    ? `Rows ${matchingDiagnostics.rowsParsed} • Pairs ${matchingDiagnostics.pairsParsed} • Duplicates dropped ${matchingDiagnostics.duplicatePairsDropped} • Legacy rows ${matchingDiagnostics.legacyRows} • Shape ${matchingDiagnostics.shape}`
+    ? `Rows ${matchingDiagnostics.rowsParsed} • Pairs ${matchingDiagnostics.pairsParsed} • Duplicates dropped ${matchingDiagnostics.duplicatePairsDropped} • Invalid rows ${matchingDiagnostics.invalidRows}`
     : null;
   const invalidRange =
     filters.minLength !== null &&
@@ -414,6 +426,58 @@ export function PackInspector({
             </section>
           )}
           <div className="pack-inspector__controls">
+            <fieldset>
+              <legend>Preset library</legend>
+              {libraryMeta && (
+                <p className="pack-inspector__hint" role="note">
+                  Library v{libraryMeta.libraryVersion}
+                  {libraryMeta.updated ? ` · updated ${new Date(libraryMeta.updated).toLocaleDateString()}` : ""}
+                </p>
+              )}
+              {libraryPresets.length > 0 ? (
+                <ul className="pack-inspector__presets pack-inspector__presets--library">
+                  {libraryPresets.map((preset) => {
+                    const isActive = activeLibraryPresetId === preset.id;
+                    const typeLabel = preset.exerciseTypes
+                      .map((type) => TYPE_LABELS[type])
+                      .join(", ");
+                    const levelLabel = preset.levels.join(", ");
+                    return (
+                      <li
+                        key={preset.id}
+                        className={`pack-inspector__preset-item pack-inspector__preset-item--library${
+                          isActive ? " pack-inspector__preset-item--active" : ""
+                        }`}
+                      >
+                        <div className="pack-inspector__preset-meta">
+                          <strong>{preset.label}</strong>
+                          {isActive && <span className="pack-inspector__badge">Active</span>}
+                        </div>
+                        {preset.description && (
+                          <p className="pack-inspector__preset-description">{preset.description}</p>
+                        )}
+                        <div className="pack-inspector__preset-details">
+                          <span>Levels: {levelLabel}</span>
+                          <span>Types: {typeLabel}</span>
+                          {preset.tags.length > 0 && <span>Tags: {preset.tags.join(", ")}</span>}
+                        </div>
+                        <div className="pack-inspector__preset-actions">
+                          <button
+                            type="button"
+                            onClick={() => onApplyLibraryPresetFromLibrary(preset.id)}
+                            disabled={isActive}
+                          >
+                            {isActive ? "Applied" : "Apply"}
+                          </button>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="pack-inspector__empty">No library presets for this dataset.</p>
+              )}
+            </fieldset>
             <fieldset>
               <legend>Filters</legend>
               <div className="pack-inspector__control-group">

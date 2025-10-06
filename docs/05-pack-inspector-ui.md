@@ -25,7 +25,17 @@ Provide a lightweight review layer inside the app to curate packs for a session.
 
 - Presets capture: filters, seed, pairs-per-set, gap controls (mode, bank size, hints, difficulty).
 - One-click "Duplicate with new seed" for homework variants.
-- Preset library will surface common grammar/vocab targets for quick start (Phase 2).
+- Preset library surfaces common grammar/vocab targets for quick start (Phase 2).
+
+### Preset Library UI (Phase 2)
+
+- **Library panel** (left rail) lists curated presets grouped by skill (Grammar, Vocabulary, Skills).
+- Selecting a preset shows a preview: description, applicable levels/exercise types, and a summary of filters + gap controls that will change.
+- **Apply** button updates inspector state (filters, gap controls, max items, matching set size) in one step. Changes are previewed before confirmation.
+- **Save as custom preset** lets teachers tweak a library preset and store it under “My presets” (existing local storage).
+- Quick actions per preset: “Apply & new seed” (gap-fill/matching) and “Open in builder” (deep link to cards-to-packs CLI instructions).
+- Library presets are read-only (ships with app). Custom presets remain editable/removable as today.
+- When a preset is active, a badge shows the preset name and offers “Revert” to restore previous ad-hoc filters.
 
 ## Non-Goals
 

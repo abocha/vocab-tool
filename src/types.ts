@@ -144,3 +144,47 @@ export interface InspectorPreset {
   matchingSetSize: number;
   matchingSeed?: string;
 }
+
+export type PresetSeedStrategy =
+  | "preserve"
+  | "regen"
+  | {
+      type: "fixed";
+      seed: string;
+    };
+
+export interface LibraryPresetDefinition {
+  id: string;
+  label: string;
+  description?: string;
+  version: number;
+  tags?: string[];
+  exerciseTypes: ExerciseType[];
+  levels: Level[];
+  filters?: Partial<InspectorFilters>;
+  gapFill?: Partial<GapFillInspectorControls>;
+  matching?: {
+    setSize?: number;
+    seedStrategy?: PresetSeedStrategy;
+  };
+  settings?: Partial<AppSettings> & {
+    maxItems?: number | "all";
+    seedStrategy?: PresetSeedStrategy;
+  };
+  builder?: {
+    gapfill?: {
+      enforceMode?: GapMode;
+      allowFunctionWords?: boolean;
+      extraFamilies?: string[];
+    };
+    matching?: {
+      pairLimit?: number;
+    };
+  };
+}
+
+export interface LibraryPresetManifest {
+  libraryVersion: number;
+  updated?: string;
+  presets: LibraryPresetDefinition[];
+}

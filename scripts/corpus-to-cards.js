@@ -730,20 +730,12 @@ async function main() {
   const maxColloc = Math.max(minColloc, toNumber(opts.get("--maxColloc")) ?? 8);
   const showSamples = opts.has("--showSamples");
   const sfwLevelRaw = opts.get("--sfwLevel") ? String(opts.get("--sfwLevel")).toLowerCase() : null;
-  const sfwFlag = readBooleanOption(opts, "--sfw", true);
+  if (opts.has("--sfw")) {
+    console.warn("`--sfw` is no longer supported. Use --sfwLevel <off|default|strict> instead.");
+  }
   let sfwLevel = sfwLevelRaw;
-  let sfw = sfwFlag;
-  if (sfwLevel) {
-    if (sfwLevel === "off") {
-      sfw = false;
-    } else if (sfwLevel === "default" || sfwLevel === "strict") {
-      sfw = true;
-    } else {
-      sfwLevel = "default";
-      sfw = true;
-    }
-  } else {
-    sfwLevel = sfw ? "default" : "off";
+  if (!sfwLevel || !["off", "default", "strict"].includes(sfwLevel)) {
+    sfwLevel = "default";
   }
   const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
   const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
@@ -775,7 +767,6 @@ async function main() {
     nationalitiesPath,
     acronymMinLen,
     dropProperNouns,
-    sfw,
     sfwLevel,
     sfwAllowPath,
   });
@@ -794,7 +785,6 @@ async function main() {
         maxExamples,
         minColloc,
         maxColloc,
-        sfw,
         sfwLevel,
         dropProperNouns,
         acronymMinLen,

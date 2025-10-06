@@ -351,7 +351,6 @@ export async function buildFilterConfig({
   nationalitiesPath,
   acronymMinLen = 3,
   dropProperNouns = true,
-  sfw = true,
   sfwLevel = "default",
   sfwAllowPath,
   sfwAnatomyPath,
@@ -397,9 +396,6 @@ export async function buildFilterConfig({
   let resolvedLevel = sfwLevel ? String(sfwLevel).toLowerCase() : "default";
   if (![`off`, `default`, `strict`].includes(resolvedLevel)) {
     resolvedLevel = "default";
-  }
-  if (!sfw && resolvedLevel === "default") {
-    resolvedLevel = "off";
   }
 
   const { patterns: sfwPatterns, allowPatterns: sfwAllowPatterns, level: effectiveLevel } = getSfwPatterns({

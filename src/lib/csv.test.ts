@@ -34,18 +34,13 @@ describe("buildMatchingPairs", () => {
       },
     ];
 
-    const { pairs, diagnostics, shape } = __buildMatchingPairsForTest(rows, collector as any);
+    const { pairs, diagnostics } = __buildMatchingPairsForTest(rows, collector as any);
 
     const leftRight = pairs.map((pair: MatchingPair) => `${pair.left}:${pair.right}`);
 
-    expect(leftRight).toEqual([
-      "cat:chat",
-      "dog:chien",
-      "bird:oiseau",
-    ]);
-    expect(diagnostics.legacyRows).toBe(1);
+    expect(leftRight).toEqual(["bird:oiseau"]);
+    expect(diagnostics.invalidRows).toBe(1);
     expect(diagnostics.duplicatePairsDropped).toBe(1);
-    expect(diagnostics.pairsParsed).toBe(3);
-    expect(shape).toBe("mixed");
+    expect(diagnostics.pairsParsed).toBe(1);
   });
 });

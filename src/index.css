@@ -646,6 +646,10 @@ button:focus-visible {
   gap: 0.6rem;
 }
 
+.pack-inspector__presets--library {
+  margin-top: 0.5rem;
+}
+
 .pack-inspector__preset-item {
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -654,6 +658,17 @@ button:focus-visible {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+.pack-inspector__preset-item--library {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.pack-inspector__preset-item--active {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2);
 }
 
 .pack-inspector__preset-meta {
@@ -666,6 +681,20 @@ button:focus-visible {
 .pack-inspector__preset-meta span {
   font-size: 0.8rem;
   color: #64748b;
+}
+
+.pack-inspector__preset-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.pack-inspector__preset-description {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #334155;
 }
 
 .pack-inspector__preset-actions {

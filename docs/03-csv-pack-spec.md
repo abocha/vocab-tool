@@ -32,7 +32,7 @@ Optional (ignored by older readers):
 - Unknown columns must be ignored by readers.
 - `answers` supports multi-blank with grouped pipes when needed (see Builders).
 
-*Matching remains one pair per row; legacy set-per-row stays deprecated.*
+*Matching remains one pair per row; legacy set-per-row is no longer accepted.*
 
 ### 2) Matching
 
@@ -42,7 +42,7 @@ Optional (ignored by older readers):
 - **Notes:**
   - `left` is the prompt/collocate; `right` is the target lemma. Each row represents exactly one pair.
   - `count` is optional metadata (often left blank). The frontend derives its own grouping, so this value is not used for set sizing.
-  - The app still detects legacy set-per-row rows (`a|b|c`) for backward compatibility. They are split into individual pairs, a warning banner is shown, and `packs-validate` reports them under `deprecated_set_per_row`. Prefer converting legacy files with `npm run packs:convert:matching` (see helper script) before publishing.
+  - Rows containing multiple pipe-separated entries are rejected. Convert legacy set-per-row files with `npm run packs:convert:matching` before loading them into the app.
 
 ### 3) MCQ
 

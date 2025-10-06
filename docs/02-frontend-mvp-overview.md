@@ -24,7 +24,7 @@
 
 ## Known Gaps (to iterate)
 
-- Matching UX: legacy set-per-row CSVs still load with a warning; consider removing support once packs are migrated.
+- Matching UX: CSVs must provide one pair per row. Legacy set-per-row files are rejected at load time; convert them before import.
 - Empty/error states: clear messages; retry affordance.
 - Large CSVs: sampling and pagination toggles (client-side).
 - Basic a11y sanity checks (labels, ARIA where needed).

@@ -9,6 +9,12 @@ import {
 } from "../lib/matching";
 import { createItemId } from "../lib/id";
 import {
+  getLibraryMetadata,
+  getLibraryPreset,
+  listLibraryPresets,
+  type PresetSummary,
+} from "../lib/preset-library";
+import {
   getDefaultGapFillControls,
   getDefaultInspectorFilters,
   getDefaultInspectorState,
@@ -34,6 +40,7 @@ import type {
   MatchingPair,
   ProgressMap,
   GapFillInspectorControls,
+  PresetSeedStrategy,
 } from "../types";
 import { TopBar } from "../components/TopBar";
 import { Footer } from "../components/Footer";
@@ -116,9 +123,11 @@ export function Home() {
   const [matchingPairs, setMatchingPairs] = useState<MatchingPair[]>([]);
   const [matchingSetSize, setMatchingSetSize] = useState<number>(DEFAULT_MATCHING_SET_SIZE);
   const [matchingSeed, setMatchingSeed] = useState<string | null>(null);
+  const [activeLibraryPresetId, setActiveLibraryPresetId] = useState<string | null>(null);
   const urlSetSizeRef = useRef<number | null>(null);
   const urlSeedRef = useRef<string | null>(null);
   const inspectorHydratedRef = useRef(false);
+  const libraryApplicationRef = useRef(false);
   const deferredRegex = useDeferredValue(inspectorFilters.regex);
   const { regex: compiledRegex, error: compiledRegexError } = useMemo(
     () => compileInspectorRegex(deferredRegex),
@@ -305,10 +314,24 @@ export function Home() {
     return nextItems;
   }, [filteredItems, settings.shuffle, settings.maxItems]);
 
+  const libraryMetadata = useMemo(() => getLibraryMetadata(), []);
+  const libraryPresets: PresetSummary[] = useMemo(
+    () =>
+      listLibraryPresets({
+        level: settings.level,
+        exerciseType: settings.exerciseType,
+      }),
+    [settings.exerciseType, settings.level],
+  );
+
   useEffect(() => {
     setDisplayItems(preparedItems);
     setCurrentIndex(0);
   }, [preparedItems]);
+
+  useEffect(() => {
+    setActiveLibraryPresetId(null);
+  }, [settings.level, settings.exerciseType]);
 
   useEffect(() => {
     setHiddenItemIds((prev) => {
@@ -364,7 +387,7 @@ export function Home() {
       ? `Parsed ${rowCount} rows → ${items.length} valid → ${filteredItems.length} after filters. Showing ${displayItems.length} in session.`
       : "No rows parsed from the CSV pack.";
     if (settings.exerciseType === "matching" && matchingDiagnostics) {
-      summary = `${summary} Matching: pairs ${matchingDiagnostics.pairsParsed}, duplicates dropped ${matchingDiagnostics.duplicatePairsDropped}, legacy rows ${matchingDiagnostics.legacyRows}, shape ${matchingDiagnostics.shape}.`;
+      summary = `${summary} Matching: pairs ${matchingDiagnostics.pairsParsed}, duplicates dropped ${matchingDiagnostics.duplicatePairsDropped}, invalid rows ${matchingDiagnostics.invalidRows}.`;
     }
     return summary;
   }, [
@@ -386,16 +409,25 @@ export function Home() {
     info: "Info",
   };
 
-  const handleSettingsChange = useCallback((next: AppSettings) => {
-    setSettings(next);
-    saveSettings(next);
-  }, []);
+  const handleSettingsChange = useCallback(
+    (next: AppSettings) => {
+      setSettings(next);
+      saveSettings(next);
+      if (!libraryApplicationRef.current) {
+        setActiveLibraryPresetId(null);
+      }
+    },
+    [],
+  );
 
   const handleMatchingSetSizeChange = useCallback((value: number) => {
     const clamped = clampSetSize(value);
     urlSetSizeRef.current = null;
     setMatchingSetSize(clamped);
     saveMatchingSetSize(clamped);
+    if (!libraryApplicationRef.current) {
+      setActiveLibraryPresetId(null);
+    }
   }, []);
 
   const handleResult = useCallback(
@@ -428,10 +460,16 @@ export function Home() {
 
   const handleFiltersChange = useCallback((nextFilters: InspectorFilters) => {
     setInspectorFilters(nextFilters);
+    if (!libraryApplicationRef.current) {
+      setActiveLibraryPresetId(null);
+    }
   }, []);
 
   const handleResetFilters = useCallback(() => {
     setInspectorFilters(getDefaultInspectorFilters());
+    if (!libraryApplicationRef.current) {
+      setActiveLibraryPresetId(null);
+    }
   }, []);
 
   const handleToggleHidden = useCallback((itemId: string) => {
@@ -444,10 +482,16 @@ export function Home() {
       }
       return next;
     });
+    if (!libraryApplicationRef.current) {
+      setActiveLibraryPresetId(null);
+    }
   }, []);
 
   const handleClearHidden = useCallback(() => {
     setHiddenItemIds(new Set());
+    if (!libraryApplicationRef.current) {
+      setActiveLibraryPresetId(null);
+    }
   }, []);
 
   const handleToggleInspectorOpen = useCallback(() => {
@@ -464,10 +508,36 @@ export function Home() {
 
   const handleGapFillControlsChange = useCallback((next: GapFillInspectorControls) => {
     setGapFillControls(next);
+    if (!libraryApplicationRef.current) {
+      setActiveLibraryPresetId(null);
+    }
   }, []);
+
+  const applyMatchingSeedStrategy = useCallback(
+    (strategy?: PresetSeedStrategy) => {
+      if (!strategy || settings.exerciseType !== "matching") {
+        return;
+      }
+      if (strategy === "preserve") {
+        return;
+      }
+      if (strategy === "regen") {
+        const seed = `preset-${Math.random().toString(36).slice(2, 10)}`;
+        setMatchingSeed(seed);
+        urlSeedRef.current = seed;
+        return;
+      }
+      if (typeof strategy === "object" && strategy.type === "fixed") {
+        setMatchingSeed(strategy.seed);
+        urlSeedRef.current = strategy.seed;
+      }
+    },
+    [settings.exerciseType],
+  );
 
   const applyPreset = useCallback(
     (preset: InspectorPreset) => {
+      setActiveLibraryPresetId(null);
       setInspectorFilters({ ...preset.filters });
       setHiddenItemIds(new Set(preset.hiddenIds ?? []));
       setGapFillControls({ ...preset.gapFill });
@@ -578,6 +648,62 @@ export function Home() {
       applyPreset(duplicate);
     },
     [applyPreset, presets, settings.exerciseType, settings.level],
+  );
+
+  const handleApplyLibraryPreset = useCallback(
+    (presetId: string) => {
+      const preset = getLibraryPreset(presetId);
+      if (!preset) {
+        return;
+      }
+      libraryApplicationRef.current = true;
+      try {
+        setActiveLibraryPresetId(presetId);
+        const baseFilters = getDefaultInspectorFilters();
+        const nextFilters = preset.filters ? { ...baseFilters, ...preset.filters } : baseFilters;
+        setInspectorFilters(nextFilters);
+        setHiddenItemIds(new Set());
+
+        if (settings.exerciseType === "gapfill") {
+          const baseGap = getDefaultGapFillControls();
+          const mergedHints = {
+            ...baseGap.hints,
+            ...(preset.gapFill?.hints ?? {}),
+          };
+          const nextGap: GapFillInspectorControls = {
+            ...baseGap,
+            ...(preset.gapFill ?? {}),
+            hints: mergedHints,
+          };
+          setGapFillControls(nextGap);
+        }
+
+        if (settings.exerciseType === "matching") {
+          if (preset.matching?.setSize) {
+            handleMatchingSetSizeChange(preset.matching.setSize);
+          }
+          const seedStrategy = preset.matching?.seedStrategy ?? preset.settings?.seedStrategy;
+          applyMatchingSeedStrategy(seedStrategy);
+        }
+
+        if (preset.settings) {
+          const { seedStrategy: _seedStrategy, ...restSettings } = preset.settings;
+          const nextSettings: AppSettings = {
+            ...settings,
+            ...restSettings,
+          };
+          handleSettingsChange(nextSettings);
+        }
+      } finally {
+        libraryApplicationRef.current = false;
+      }
+    },
+    [
+      applyMatchingSeedStrategy,
+      handleMatchingSetSizeChange,
+      handleSettingsChange,
+      settings,
+    ],
   );
 
   useEffect(() => {
@@ -748,6 +874,10 @@ export function Home() {
         onApplyPreset={handleApplyPreset}
         onDuplicatePreset={handleDuplicatePreset}
         onDeletePreset={handleDeletePreset}
+        libraryPresets={libraryPresets}
+        activeLibraryPresetId={activeLibraryPresetId}
+        onApplyLibraryPresetFromLibrary={handleApplyLibraryPreset}
+        libraryMeta={libraryMetadata}
       />
       <Footer />
     </div>

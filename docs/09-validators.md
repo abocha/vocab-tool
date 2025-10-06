@@ -8,18 +8,27 @@ Cheap heuristics to flag low-quality items and protect the learner experience.
 
 - **Length**: sentences within bounds (e.g., 40–120 chars).
 - **Lexical rarity**: % tokens above Zipf threshold per level.
-- **POS consistency**: MCQ/distractors share POS; matching pairs valid.
+- **POS consistency**: MCQ distractors (and answers) share a rough POS; matching pairs remain well-formed.
 - **Morphology**: distractors not trivial variants; avoid headword stem.
 - **Duplicates**: MinHash/normalized text dedup within a pack.
 - **Toxicity/basic safety**: banned list; skip sensitive topics.
 - **Attribution presence**: `source` and `license` non-empty.
-- **Bank hygiene** (gap-fill): options unique, POS/morph match the slot, no stray stopwords unless grammar mode, bank size ≥ minimum, answer present.
+- **Bank hygiene** (gap-fill): options unique, POS/morph match the slot, no stray stopwords unless grammar mode, bank size ≥ minimum, answer present; relaxor usage tracked.
+- **Near-duplicates**: fuzzy match prompts/options to spot near-identical items for review.
+
+### Telemetry
+
+- Bank counts per file and globally.
+- Relaxed-bank usage (how often the fallback fired).
+- Tag mix (`colloc`, `neighbor`, `curated`, `family`, etc.).
+- Bank-size histogram to keep pack settings honest.
 
 ### Gap-Fill Specific
 
 - Bank validity: all options share required POS/morph (using the exported `bank_meta.slot` when available); distractors not identical to answer.
 - Banned blanks: reject rows where the blank token has avoid_as_blank, is a proper noun/number/date, or falls outside Zipf band for the chosen difficulty (unless grammar mode).
 - Collocation sanity: if gap_mode=collocation, ensure the partner token appears in the sentence.
+- Near-duplicate prompts: fuzzy-matching prompts are surfaced for manual QA.
 
 ### Sampling QA
 

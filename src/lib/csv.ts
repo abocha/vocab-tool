@@ -133,7 +133,6 @@ export interface LoadedPack {
   rowCount: number;
   fingerprint: string;
   matchingDiagnostics?: MatchingDiagnostics | null;
-  matchingShape?: "pair" | "legacy" | "mixed" | null;
   matchingPairs?: MatchingPair[] | null;
 }
 
@@ -282,14 +281,13 @@ function buildGapFillRows(rows: RawRow[], collect: ReturnType<typeof createIssue
 
 const MAX_MATCHING_DIAGNOSTIC_EXAMPLES = 5;
 
-type MatchingExampleType = "legacy" | "duplicate";
+type MatchingExampleType = "invalid" | "duplicate";
 
 export interface MatchingDiagnostics {
   rowsParsed: number;
   pairsParsed: number;
   duplicatePairsDropped: number;
-  legacyRows: number;
-  shape: "pair" | "legacy" | "mixed";
+  invalidRows: number;
   examples: Record<MatchingExampleType, string[]>;
 }
 
@@ -298,10 +296,9 @@ function createMatchingDiagnostics(): MatchingDiagnostics {
     rowsParsed: 0,
     pairsParsed: 0,
     duplicatePairsDropped: 0,
-    legacyRows: 0,
-    shape: "pair",
+    invalidRows: 0,
     examples: {
-      legacy: [],
+      invalid: [],
       duplicate: [],
     },
   };
@@ -349,14 +346,12 @@ function normalizePairKey(left: string, right: string): string {
 function buildMatchingPairs(
   rows: RawRow[],
   collect: ReturnType<typeof createIssueCollector>,
-): { pairs: MatchingPair[]; diagnostics: MatchingDiagnostics; shape: "pair" | "legacy" | "mixed" } {
+): { pairs: MatchingPair[]; diagnostics: MatchingDiagnostics } {
   const diagnostics = createMatchingDiagnostics();
   diagnostics.rowsParsed = rows.length;
 
   const pairs: MatchingPair[] = [];
   const seenPairs = new Set<string>();
-  let sawLegacy = false;
-  let sawPairRow = false;
 
   rows.forEach((row, index) => {
     const rowNumber = index + 1;
@@ -382,20 +377,14 @@ function buildMatchingPairs(
 
     const leftParts = splitList(leftRaw);
     const rightParts = splitList(rightRaw);
-    const isLegacy = leftRaw.includes("|") || rightRaw.includes("|") || leftParts.length > 1 || rightParts.length > 1;
-    if (isLegacy) {
-      diagnostics.legacyRows += 1;
-      sawLegacy = true;
-      recordMatchingExample(diagnostics, "legacy", `row ${rowNumber}: ${leftRaw} ↔ ${rightRaw}`);
-    } else {
-      sawPairRow = true;
-    }
-
-    const pairCount = isLegacy ? Math.min(leftParts.length, rightParts.length) : 1;
-    if (isLegacy && pairCount === 0) {
+    const hasMultipleLeft = leftParts.length !== 1;
+    const hasMultipleRight = rightParts.length !== 1;
+    if (hasMultipleLeft || hasMultipleRight) {
+      diagnostics.invalidRows += 1;
+      recordMatchingExample(diagnostics, "invalid", `row ${rowNumber}: ${leftRaw} ↔ ${rightRaw}`);
       collect.push({
         severity: "warning",
-        message: `Legacy row ${rowNumber} did not contain aligned pairs and was skipped.`,
+        message: `Skipped matching row ${rowNumber} due to deprecated set-per-row format. Convert to pair-per-row before loading.`,
       });
       return;
     }
@@ -426,19 +415,10 @@ function buildMatchingPairs(
       });
     };
 
-    if (isLegacy) {
-      for (let i = 0; i < pairCount; i += 1) {
-        emitPair(leftParts[i], rightParts[i]);
-      }
-    } else {
-      emitPair(leftParts[0] ?? leftRaw, rightParts[0] ?? rightRaw);
-    }
+    emitPair(leftParts[0] ?? leftRaw, rightParts[0] ?? rightRaw);
   });
 
-  const shape = sawLegacy && sawPairRow ? "mixed" : sawLegacy ? "legacy" : "pair";
-  diagnostics.shape = shape;
-
-  return { pairs, diagnostics, shape };
+  return { pairs, diagnostics };
 }
 
 export { buildMatchingPairs as __buildMatchingPairsForTest };
@@ -446,29 +426,16 @@ export { buildMatchingPairs as __buildMatchingPairsForTest };
 function matchingDiagnosticsToIssues(diagnostics: MatchingDiagnostics): PackIssue[] {
   const issues: PackIssue[] = [];
 
-  const summaryMessage = `Summary — rows parsed ${diagnostics.rowsParsed}, pairs kept ${diagnostics.pairsParsed}, duplicates dropped ${diagnostics.duplicatePairsDropped}, legacy rows ${diagnostics.legacyRows}, shape ${diagnostics.shape}.`;
+  const summaryMessage = `Summary — rows parsed ${diagnostics.rowsParsed}, pairs kept ${diagnostics.pairsParsed}, duplicates dropped ${diagnostics.duplicatePairsDropped}, invalid rows ${diagnostics.invalidRows}.`;
   issues.push({ severity: "info", message: summaryMessage });
 
-  if (diagnostics.shape === "mixed") {
-    issues.push({
-      severity: "info",
-      message: "Matching pack mixes deprecated set-per-row data with pair-per-row pairs.",
-    });
-  } else if (diagnostics.shape === "legacy") {
+  if (diagnostics.invalidRows > 0) {
+    const invalidExamples = selectRepresentativeSamples(diagnostics.examples.invalid);
     issues.push({
       severity: "warning",
-      message: "Matching pack detected entirely in deprecated set-per-row format.",
-      hint: "Convert to pair-per-row for deterministic grouping and validation.",
-    });
-  }
-
-  if (diagnostics.legacyRows > 0) {
-    const legacyExamples = selectRepresentativeSamples(diagnostics.examples.legacy);
-    issues.push({
-      severity: "warning",
-      message: `This matching pack uses a deprecated set-per-row format (${diagnostics.legacyRows} legacy row${diagnostics.legacyRows === 1 ? "" : "s"}). Convert to pair-per-row for best results.`,
-      hint: "Run scripts/convert-matching-set-to-pairs.js to migrate existing CSVs.",
-      details: legacyExamples.length > 0 ? legacyExamples : undefined,
+      message: `Skipped ${diagnostics.invalidRows} matching row${diagnostics.invalidRows === 1 ? "" : "s"} due to deprecated set-per-row format.`,
+      hint: "Convert legacy rows to pair-per-row before loading (see scripts/convert-matching-set-to-pairs.js).",
+      details: invalidExamples.length > 0 ? invalidExamples : undefined,
     });
   }
 
@@ -489,7 +456,7 @@ function logMatchingDiagnostics(level: Level, diagnostics: MatchingDiagnostics) 
     return;
   }
 
-  const summary = `Matching loader summary (${level}): rowsParsed=${diagnostics.rowsParsed}, pairsParsed=${diagnostics.pairsParsed}, duplicatePairsDropped=${diagnostics.duplicatePairsDropped}, legacyRows=${diagnostics.legacyRows}, shape=${diagnostics.shape}`;
+  const summary = `Matching loader summary (${level}): rowsParsed=${diagnostics.rowsParsed}, pairsParsed=${diagnostics.pairsParsed}, duplicatePairsDropped=${diagnostics.duplicatePairsDropped}, invalidRows=${diagnostics.invalidRows}`;
   console.log(summary);
   (Object.entries(diagnostics.examples) as Array<[MatchingExampleType, string[]]>).forEach(([type, samples]) => {
     selectRepresentativeSamples(samples).forEach((sample) => {
@@ -604,7 +571,6 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
       rowCount: 0,
       fingerprint: createHash(`${level}:${type}:missing-file`),
       matchingDiagnostics: null,
-      matchingShape: null,
     };
   }
 
@@ -658,7 +624,6 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
 
         let items: ExerciseItem[] = [];
         let matchingDiagnostics: MatchingDiagnostics | null = null;
-        let matchingShape: "pair" | "legacy" | "mixed" | null = null;
         let matchingPairs: MatchingPair[] | null = null;
         switch (type) {
           case "gapfill":
@@ -668,7 +633,6 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
             {
               const result = buildMatchingPairs(rows, collector);
               matchingDiagnostics = result.diagnostics;
-              matchingShape = result.shape;
               matchingPairs = result.pairs;
               items = result.pairs.map((pair, pairIndex) => ({
                 id: createItemId("matching", `${pair.left}|${pair.right}|${pairIndex}`),
@@ -710,7 +674,6 @@ export async function loadExercises(level: Level, type: ExerciseType): Promise<L
           rowCount: rows.length,
           fingerprint: buildPackFingerprint(level, type, fileName, rows, items),
           matchingDiagnostics,
-          matchingShape,
           matchingPairs,
         });
       },

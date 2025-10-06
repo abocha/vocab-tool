@@ -170,6 +170,17 @@ function parsePipeList(value) {
     .filter((part) => part.length > 0);
 }
 
+function guessPos(word) {
+  if (!word) return "";
+  const lower = word.toLowerCase();
+  if (lower.endsWith("ly")) return "ADV";
+  if (lower.endsWith("ing") || lower.endsWith("ed")) return "VERB";
+  if (STOPWORDS.has(lower)) return "FUNCTION";
+  if (lower.endsWith("ous") || lower.endsWith("ful") || lower.endsWith("ive") || lower.endsWith("al")) return "ADJ";
+  if (lower.endsWith("tion") || lower.endsWith("ment") || lower.endsWith("ness") || lower.endsWith("ity")) return "NOUN";
+  return "NOUN";
+}
+
 function mapToObject(map, { numeric = false } = {}) {
   if (!(map instanceof Map)) {
     return {};
@@ -442,7 +453,7 @@ function createMatchingState() {
       missing: 0,
       duplicate: 0,
       attribution: 0,
-      deprecated_set_per_row: 0,
+      invalid_format: 0,
     },
     seenPairs: new Set(),
   };
@@ -465,61 +476,52 @@ function evaluateMatchingRow(row, state, filterConfig, filterSummary) {
 
   const leftParts = parsePipeList(rawLeft);
   const rightParts = parsePipeList(rawRight);
-  const isDeprecated = rawLeft.includes("|") || rawRight.includes("|") || leftParts.length > 1 || rightParts.length > 1;
+  state.total += 1;
 
-  if (isDeprecated) {
-    state.drops.deprecated_set_per_row += 1;
-    recordDrop(filterSummary, "deprecated_set_per_row", `${rawLeft} :: ${rawRight}`);
+  if (leftParts.length !== 1 || rightParts.length !== 1) {
+    state.drops.invalid_format += 1;
+    recordDrop(filterSummary, "invalid_format", `${rawLeft} :: ${rawRight}`);
+    return;
   }
 
-  const pairCount = isDeprecated ? Math.min(leftParts.length, rightParts.length) : 1;
-  const effectiveTotal = Math.max(isDeprecated ? pairCount : 1, 1);
-  state.total += effectiveTotal;
-  if (pairCount === 0) {
+  const leftValue = leftParts[0] ?? rawLeft;
+  const rightValue = rightParts[0] ?? rawRight;
+  if (!leftValue || !rightValue) {
     state.drops.missing += 1;
     return;
   }
 
-  for (let i = 0; i < pairCount; i += 1) {
-    const leftValue = isDeprecated ? leftParts[i] : leftParts[0] ?? rawLeft;
-    const rightValue = isDeprecated ? rightParts[i] : rightParts[0] ?? rawRight;
-    if (!leftValue || !rightValue) {
-      continue;
-    }
-    const key = `${normalizeText(leftValue)}|${normalizeText(rightValue)}`;
-    if (state.seenPairs.has(key)) {
-      state.drops.duplicate += 1;
-      continue;
-    }
-    state.seenPairs.add(key);
-    const sentence = `the ${leftValue} ${rightValue}`;
-    const tokens = [
-      { surface: "the", normalized: "the", index: 0 },
-      { surface: leftValue, normalized: leftValue.toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
-      { surface: rightValue, normalized: rightValue.toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
-    ];
-    evaluateSurface({
-      surface: leftValue,
-      tokens,
-      index: 1,
-      sentence,
-      filterConfig,
-      dropSummary: filterSummary,
-    });
-    evaluateSurface({
-      surface: rightValue,
-      tokens,
-      index: 2,
-      sentence,
-      filterConfig,
-      dropSummary: filterSummary,
-    });
-    checkUnsafeText(sentence, filterConfig, filterSummary);
-    state.keptPairs += 1;
-    if (!isDeprecated) {
-      break;
-    }
+  const key = `${normalizeText(leftValue)}|${normalizeText(rightValue)}`;
+  if (state.seenPairs.has(key)) {
+    state.drops.duplicate += 1;
+    return;
   }
+  state.seenPairs.add(key);
+
+  const sentence = `the ${leftValue} ${rightValue}`;
+  const tokens = [
+    { surface: "the", normalized: "the", index: 0 },
+    { surface: leftValue, normalized: leftValue.toLowerCase().replace(/[^a-z]+/g, ""), index: 1 },
+    { surface: rightValue, normalized: rightValue.toLowerCase().replace(/[^a-z]+/g, ""), index: 2 },
+  ];
+  evaluateSurface({
+    surface: leftValue,
+    tokens,
+    index: 1,
+    sentence,
+    filterConfig,
+    dropSummary: filterSummary,
+  });
+  evaluateSurface({
+    surface: rightValue,
+    tokens,
+    index: 2,
+    sentence,
+    filterConfig,
+    dropSummary: filterSummary,
+  });
+  checkUnsafeText(sentence, filterConfig, filterSummary);
+  state.keptPairs += 1;
 }
 
 function createMcqState() {
@@ -532,9 +534,11 @@ function createMcqState() {
       answerMismatch: 0,
       duplicate: 0,
       attribution: 0,
+      posMismatch: 0,
     },
     nearDuplicates: 0,
     seen: new Set(),
+    promptFingerprints: [],
   };
 }
 
@@ -594,15 +598,42 @@ function evaluateMcqRow(row, state, filterConfig, filterSummary) {
   }
   state.seen.add(key);
 
+  const fingerprint = normalizeText(prompt).replace(/[^a-z0-9]/g, "");
+  for (const prior of state.promptFingerprints) {
+    if (!prior || !fingerprint) continue;
+    if (Math.abs(prior.length - fingerprint.length) > 10) continue;
+    if (levenshtein(prior, fingerprint) <= 8) {
+      state.nearDuplicates += 1;
+      recordDrop(filterSummary, "nearDuplicatePrompt", prompt.slice(0, 160));
+      break;
+    }
+  }
+  state.promptFingerprints.push(fingerprint);
+
   for (let i = 0; i < options.length; i += 1) {
     for (let j = i + 1; j < options.length; j += 1) {
       const distance = levenshtein(normalizeText(options[i]), normalizeText(options[j]));
       if (distance <= 1) {
         state.nearDuplicates += 1;
+        recordDrop(filterSummary, "nearDuplicateOptions", `${options[i]} :: ${options[j]}`);
         i = options.length;
         break;
       }
     }
+  }
+
+  const words = [answer, ...options];
+  const posValues = new Set();
+  for (const value of words) {
+    const firstToken = safeString(value).split(/\s+/)[0] ?? "";
+    const pos = guessPos(firstToken);
+    if (pos && pos !== "FUNCTION") {
+      posValues.add(pos);
+    }
+  }
+  if (posValues.size > 1) {
+    state.drops.posMismatch += 1;
+    recordDrop(filterSummary, "mcqPosMismatch", `${prompt.slice(0, 120)} :: ${Array.from(posValues).join(",")}`);
   }
 
   const reconstructed = prompt.includes("_____") ? prompt.replace("_____", answer) : prompt;
@@ -736,7 +767,7 @@ async function analyzeFile({ filePath, type }, filterConfig) {
       total: matchingState.total,
       kept: matchingState.keptPairs,
       drops: matchingState.drops,
-      deprecatedSetRows: matchingState.drops.deprecated_set_per_row ?? 0,
+      invalidFormatRows: matchingState.drops.invalid_format ?? 0,
       filterSummary,
     };
   }
@@ -790,7 +821,7 @@ function formatSummary(results, combinedFilters, aggregatedTelemetry) {
     dropped: result.total != null && result.kept != null ? result.total - result.kept : 0,
     drops: result.drops ?? {},
     notes: {
-      deprecatedSetRows: result.deprecatedSetRows ?? 0,
+      invalidFormatRows: result.invalidFormatRows ?? 0,
       nearDuplicateOptions: result.nearDuplicateOptions ?? 0,
     },
     skipped: result.skipped ?? null,
@@ -821,20 +852,12 @@ async function main() {
   }
 
   const sfwLevelRaw = optionMap.get("--sfwLevel") ? String(optionMap.get("--sfwLevel")).toLowerCase() : null;
-  const sfwFlag = readBooleanOption(optionMap, "--sfw", true);
+  if (optionMap.has("--sfw")) {
+    console.warn("`--sfw` is no longer supported. Use --sfwLevel <off|default|strict> instead.");
+  }
   let sfwLevel = sfwLevelRaw;
-  let sfw = sfwFlag;
-  if (sfwLevel) {
-    if (sfwLevel === "off") {
-      sfw = false;
-    } else if (sfwLevel === "default" || sfwLevel === "strict") {
-      sfw = true;
-    } else {
-      sfwLevel = "default";
-      sfw = true;
-    }
-  } else {
-    sfwLevel = sfw ? "default" : "off";
+  if (!sfwLevel || !["off", "default", "strict"].includes(sfwLevel)) {
+    sfwLevel = "default";
   }
   const dropProperNouns = readBooleanOption(optionMap, "--dropProperNouns", true);
   const strict = readBooleanOption(optionMap, "--strict", false);
@@ -853,7 +876,6 @@ async function main() {
     nationalitiesPath,
     acronymMinLen,
     dropProperNouns,
-    sfw,
     sfwLevel,
     sfwAllowPath,
   });

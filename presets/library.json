@@ -1,0 +1,93 @@
+{
+  "libraryVersion": 1,
+  "updated": "2025-03-05",
+  "presets": [
+    {
+      "id": "a2-collocations",
+      "label": "A2 Collocations",
+      "description": "Focus on high-frequency verb–noun collocations.",
+      "version": 1,
+      "tags": ["vocab", "collocation"],
+      "exerciseTypes": ["gapfill"],
+      "levels": ["A2", "B1"],
+      "filters": {
+        "bankQuality": "solid",
+        "relaxedOnly": false
+      },
+      "gapFill": {
+        "mode": "collocation",
+        "bankSize": 6,
+        "hints": {
+          "collocationCue": true
+        },
+        "difficulty": "A2",
+        "maxBlanksPerSentence": 1
+      },
+      "settings": {
+        "shuffle": false,
+        "maxItems": 25,
+        "seedStrategy": "regen"
+      },
+      "builder": {
+        "gapfill": {
+          "enforceMode": "collocation",
+          "extraFamilies": ["decision(N)", "coffee(N)"]
+        }
+      }
+    },
+    {
+      "id": "b1-grammar-third-person",
+      "label": "B1 Grammar: Third Person",
+      "description": "Reinforce third-person singular verb endings in present simple.",
+      "version": 1,
+      "tags": ["grammar", "verb"],
+      "exerciseTypes": ["gapfill"],
+      "levels": ["A2", "B1"],
+      "filters": {
+        "regex": "\\b(s|es)\\b",
+        "bankQuality": "soft"
+      },
+      "gapFill": {
+        "mode": "grammar",
+        "bankSize": 6,
+        "hints": {
+          "pos": true
+        },
+        "difficulty": "B1",
+        "maxBlanksPerSentence": 1
+      },
+      "settings": {
+        "shuffle": true,
+        "maxItems": 20,
+        "seedStrategy": "regen"
+      },
+      "builder": {
+        "gapfill": {
+          "enforceMode": "grammar",
+          "allowFunctionWords": true
+        }
+      }
+    },
+    {
+      "id": "matching-cognates",
+      "label": "Matching: Cognates",
+      "description": "Pair high-confidence cognates for speaking warm-ups.",
+      "version": 1,
+      "tags": ["matching", "warm-up"],
+      "exerciseTypes": ["matching"],
+      "levels": ["A2", "B1", "B2"],
+      "filters": {
+        "minLength": 10,
+        "maxLength": 120
+      },
+      "matching": {
+        "setSize": 6,
+        "seedStrategy": "preserve"
+      },
+      "settings": {
+        "shuffle": true,
+        "maxItems": 24
+      }
+    }
+  ]
+}
