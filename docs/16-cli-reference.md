@@ -14,6 +14,7 @@ same guardrail options:
   - `default`: enable the default guard set (same as passing no flag).
   - `strict`: enable the school-safe profile (drops sexual vocabulary unless allow-listed).
   - Invalid values fall back to `default`.
+  - **Default:** `strict` (omit the flag to stay in strict mode).
 - `--dropProperNouns <on|off>`
   - Default `on`. When true, filters out proper nouns using the contextual heuristics and
     allow-lists specified below.
@@ -39,7 +40,7 @@ Key options:
 - `--sentences <path>` (defaults to `.codex-local/corpus/simplewiki/clean/sentences_<level>.txt`).
 - `--freq <path>` and `--bigrams <path>` (frequency statistics; defaults live under
   `.codex-local/corpus/simplewiki/data/`).
-- `--out <path>` (default `cards/draft_cards.jsonl`).
+- `--out <path>` (default `cards/draft_cards_<LEVEL>.jsonl`).
 - `--limit <number>` cap emitted cards.
 - `--maxExamples <number>` per card (default `3`).
 - `--minColloc <number>` and `--maxColloc <number>` (defaults `5` / `8`).
@@ -48,9 +49,8 @@ Key options:
 Use the npm wrappers:
 
 ```bash
-npm run cards:draft                 # default guard profile
-npm run cards:draft -- --level B1   # override the level
-npm run cards:draft:strict          # strict guards (school safe)
+npm run cards:draft                 # default (strict) guard profile
+npm run cards:draft -- --level B1   # override the level (outputs cards/draft_cards_B1.jsonl by default)
 ```
 
 ## `cards-to-packs.js`
@@ -59,7 +59,7 @@ Builds deterministic `gapfill.csv`, `matching.csv`, and `mcq.csv` files from exi
 
 Key options:
 
-- `--cards <path>` (default `cards/draft_cards.jsonl`).
+- `--cards <path>` (default `cards/draft_cards_<LEVEL>.jsonl`).
 - `--level <A1|A2|B1|B2>` (default `A2`).
 - `--outDir <path>` (default `public/packs/<level>`).
 - `--limitGapfill`, `--limitMatching`, `--limitMcq`, `--limitScramble` (per-file row caps).
@@ -70,13 +70,15 @@ Key options:
 Typical invocations:
 
 ```bash
-npm run packs:from-cards                       # default guards, level A2
-npm run packs:from-cards -- --level B1         # override level/output dir
+npm run packs:from-cards                       # default (strict) guards, level A2
+npm run packs:from-cards -- --level B1         # override level/output dir (expects cards/draft_cards_B1.jsonl)
 npm run packs:from-cards -- --preset a2-collocations
-npm run packs:from-cards:strict                # strict guard profile
 ```
 
 Pass extra flags after `--` when using npm scripts so they reach the underlying Node CLI.
+
+> Summary JSON now includes a `bankTelemetry` object with totals by level and preset (tag mix,
+> size buckets, relaxed counts) to help spot thin banks before validation.
 
 ### Notes on `--preset`
 
@@ -90,6 +92,7 @@ can track which policy produced each bank.
 Validates generated packs (any level) and surfaces telemetry.
 
 - `--dir <path>` directory containing the CSVs (default `public/packs/A2`).
+- `--level <A1|A2|B1|B2>` convenience flag that sets `--dir public/packs/<LEVEL>` automatically.
 - `--pack <gapfill|matching|mcq|scramble>` repeatable; if omitted the validator inspects all
   detected packs.
 - `--type <auto|gapfill|matching|mcq|scramble>` force the CSV schema when file names are
@@ -97,6 +100,8 @@ Validates generated packs (any level) and surfaces telemetry.
 - `--strict` exit with a non-zero status when any guard or validator drops occur.
 - Safety flags: `--sfwLevel`, `--dropProperNouns`, `--acronymMinLen`, `--blockList`,
   `--allowList`, `--sfwAllow`.
+- Matching rows containing multiple pipe-separated values are rejected as `invalid_format` and
+  surfaced in the CLI summary.
 
 Examples:
 
@@ -137,4 +142,3 @@ npm run packs:validate -- --dir public/packs/B1 --sfwLevel strict --strict
 ```
 
 This pattern works for all scripts listed in `npm run`.
-

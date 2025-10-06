@@ -10,12 +10,9 @@
     "test": "vitest --run --pool=threads",
     "preview": "vite preview",
     "prepare:packs": "node ./scripts/prepare-packs.js",
-    "cards:draft": "node ./scripts/corpus-to-cards.js --level A2",
-    "cards:draft:strict": "npm run cards:draft -- --sfwLevel strict --dropProperNouns on",
-    "packs:from-cards": "node ./scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --outDir public/packs/A2",
-    "packs:from-cards:strict": "npm run packs:from-cards -- --sfwLevel strict --dropProperNouns on",
-    "packs:validate": "node ./scripts/packs-validate.js --dir public/packs/A2 --type auto",
-    "packs:validate:strict": "npm run packs:validate -- --sfwLevel strict --strict",
+    "cards:draft": "node ./scripts/corpus-to-cards.js",
+    "packs:from-cards": "node ./scripts/cards-to-packs.js",
+    "packs:validate": "node ./scripts/packs-validate.js --type auto",
     "packs:convert:matching": "node ./scripts/convert-matching-set-to-pairs.js --in public/packs/A2/matching.csv --out public/packs/A2/matching.pairs.csv"
   },
   "dependencies": {

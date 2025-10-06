@@ -11,7 +11,7 @@
 2. Attach 1–3 example sentences per lemma (level-gated, deduped).
 3. Collocations: derive from bigrams (e.g., ADJ+NOUN, VERB+NOUN).
 4. Compute/store `freq_zipf` (approximate via `wordfreq`).
-5. Save as `cards/draft_cards.jsonl` (one JSON per line).
+5. Save as `cards/draft_cards_<LEVEL>.jsonl` (one JSON per line).
 
 ## Selection & Cleaning
 

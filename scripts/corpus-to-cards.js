@@ -723,7 +723,8 @@ function logSummary({
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const level = opts.get("--level") || DEFAULT_LEVEL;
+  const levelRaw = opts.get("--level") || DEFAULT_LEVEL;
+  const level = String(levelRaw).toUpperCase();
   const limit = toNumber(opts.get("--limit")) ?? 0;
   const maxExamples = Math.max(1, toNumber(opts.get("--maxExamples")) ?? 3);
   const minColloc = Math.max(1, toNumber(opts.get("--minColloc")) ?? 5);
@@ -735,7 +736,7 @@ async function main() {
   }
   let sfwLevel = sfwLevelRaw;
   if (!sfwLevel || !["off", "default", "strict"].includes(sfwLevel)) {
-    sfwLevel = "default";
+    sfwLevel = "strict";
   }
   const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
   const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
@@ -755,9 +756,10 @@ async function main() {
     ? path.resolve(opts.get("--sentences"))
     : path.resolve(process.cwd(), `.codex-local/corpus/simplewiki/clean/sentences_${level}.txt`);
   const tokensPath = opts.get("--tokens") ? path.resolve(opts.get("--tokens")) : null;
+  const defaultOutName = `cards/draft_cards_${level}.jsonl`;
   const outputPath = opts.get("--out")
     ? path.resolve(opts.get("--out"))
-    : path.resolve(process.cwd(), "cards/draft_cards.jsonl");
+    : path.resolve(process.cwd(), defaultOutName);
 
   const filterConfig = await buildFilterConfig({
     cwd: process.cwd(),

@@ -19,6 +19,10 @@ const confusables = JSON.parse(
   readFileSync(new URL("./confusables.json", import.meta.url), "utf8"),
 );
 
+const COLLLOCATION_FAMILY_INDEX = buildCollocationFamilyIndex(confusables.collocationFamilies);
+const CURATED_SET_INDEX = buildCuratedSetIndex(confusables.curatedSets);
+const KNOWN_LEVELS = Object.freeze(["A1", "A2", "B1", "B2"]);
+
 let presetLibraryManifest = { presets: [], libraryVersion: 0 };
 const presetMap = new Map();
 try {
@@ -191,6 +195,216 @@ const MONTH_WORDS = new Set([
   "december"
 ]);
 const packCooldown = new Map();
+
+function buildCollocationFamilyIndex(source) {
+  const map = new Map();
+  if (Array.isArray(source)) {
+    source.forEach((entry, index) => {
+      if (!entry || typeof entry !== "object") return;
+      const id = typeof entry.id === "string" ? entry.id : `family_${index}`;
+      const anchor = typeof entry.anchor === "string" ? entry.anchor.toLowerCase() : null;
+      const pos = typeof entry.pos === "string" ? entry.pos.toUpperCase() : null;
+      const levels = Array.isArray(entry.levels)
+        ? entry.levels.map((level) => String(level).toUpperCase()).filter(Boolean)
+        : null;
+      const theme = typeof entry.theme === "string" ? entry.theme : null;
+      const entries = normalizeFamilyEntries(entry.entries);
+      map.set(id, { id, anchor, pos, levels, theme, entries });
+    });
+  } else if (source && typeof source === "object") {
+    Object.entries(source).forEach(([id, value]) => {
+      if (!value || typeof value !== "object") return;
+      const anchor = id.includes("(") ? id.slice(0, id.indexOf("(")).toLowerCase() : id.toLowerCase();
+      const pos = id.includes("(") ? id.slice(id.indexOf("(") + 1, id.indexOf(")")).toUpperCase() : null;
+      map.set(id, { id, anchor, pos, levels: null, theme: null, entries: normalizeFamilyEntries(value) });
+    });
+  }
+  return map;
+}
+
+function buildCuratedSetIndex(source) {
+  const map = new Map();
+  if (!source || typeof source !== "object") {
+    return map;
+  }
+  Object.entries(source).forEach(([posKey, list]) => {
+    if (!Array.isArray(list)) return;
+    const pos = String(posKey).toUpperCase();
+    const entries = list
+      .map((item, index) => {
+        if (!item || typeof item !== "object") return null;
+        const words = Array.isArray(item.words) ? item.words.filter(Boolean) : [];
+        if (words.length === 0) return null;
+        const id = typeof item.id === "string" ? item.id : `${pos.toLowerCase()}_${index}`;
+        const levels = Array.isArray(item.levels)
+          ? item.levels.map((level) => String(level).toUpperCase()).filter(Boolean)
+          : null;
+        const theme = typeof item.theme === "string" ? item.theme : null;
+        return {
+          id,
+          levels,
+          theme,
+          words,
+          wordsLower: words.map((word) => word.toLowerCase()),
+        };
+      })
+      .filter(Boolean);
+    map.set(pos, entries);
+  });
+  return map;
+}
+
+function normalizeFamilyEntries(raw) {
+  const result = {};
+  if (!raw || typeof raw !== "object") {
+    return result;
+  }
+  Object.entries(raw).forEach(([posKey, list]) => {
+    if (!Array.isArray(list)) return;
+    const pos = String(posKey).toUpperCase();
+    result[pos] = list.filter(Boolean);
+  });
+  return result;
+}
+
+function normalizeLevel(value) {
+  if (!value) return "";
+  return String(value).toUpperCase();
+}
+
+function levelMatches(levels, level) {
+  if (!level) return true;
+  if (!Array.isArray(levels) || levels.length === 0) return true;
+  const normalized = normalizeLevel(level);
+  return levels.includes(normalized);
+}
+
+function createBankTelemetry() {
+  return {
+    totals: {
+      banks: 0,
+      relaxed: 0,
+      untagged: 0,
+      tags: new Map(),
+      sizeBuckets: new Map(),
+    },
+    byLevel: new Map(),
+    byPreset: new Map(),
+  };
+}
+
+function ensureTelemetryEntry(map, key, { trackLevels = false } = {}) {
+  if (!map.has(key)) {
+    map.set(key, {
+      banks: 0,
+      relaxed: 0,
+      tags: new Map(),
+      sizeBuckets: new Map(),
+      levels: trackLevels ? new Map() : undefined,
+    });
+  }
+  return map.get(key);
+}
+
+function recordBankTelemetry(telemetry, { level, presetId, tags, bankSize, usedRelax }) {
+  if (!telemetry) return;
+  const normalizedLevel = normalizeLevel(level) || "UNKNOWN";
+  const sizeKey = String(bankSize ?? 0);
+  const tagSet = tags instanceof Set ? tags : new Set(tags ?? []);
+
+  const totals = telemetry.totals;
+  totals.banks += 1;
+  totals.sizeBuckets.set(sizeKey, (totals.sizeBuckets.get(sizeKey) ?? 0) + 1);
+  const effectiveTags = Array.from(tagSet).filter((tag) => tag && tag !== "preset");
+  if (effectiveTags.length === 0) {
+    totals.untagged += 1;
+  } else {
+    effectiveTags.forEach((tag) => {
+      totals.tags.set(tag, (totals.tags.get(tag) ?? 0) + 1);
+    });
+  }
+  if (usedRelax) {
+    totals.relaxed += 1;
+  }
+
+  const levelEntry = ensureTelemetryEntry(telemetry.byLevel, normalizedLevel);
+  levelEntry.banks += 1;
+  levelEntry.sizeBuckets.set(sizeKey, (levelEntry.sizeBuckets.get(sizeKey) ?? 0) + 1);
+  effectiveTags.forEach((tag) => {
+    levelEntry.tags.set(tag, (levelEntry.tags.get(tag) ?? 0) + 1);
+  });
+  if (usedRelax) {
+    levelEntry.relaxed += 1;
+  }
+
+  if (presetId) {
+    const presetEntry = ensureTelemetryEntry(telemetry.byPreset, presetId, { trackLevels: true });
+    presetEntry.banks += 1;
+    presetEntry.sizeBuckets.set(sizeKey, (presetEntry.sizeBuckets.get(sizeKey) ?? 0) + 1);
+    effectiveTags.forEach((tag) => {
+      presetEntry.tags.set(tag, (presetEntry.tags.get(tag) ?? 0) + 1);
+    });
+    if (usedRelax) {
+      presetEntry.relaxed += 1;
+    }
+    if (presetEntry.levels) {
+      presetEntry.levels.set(
+        normalizedLevel,
+        (presetEntry.levels.get(normalizedLevel) ?? 0) + 1,
+      );
+    }
+  }
+}
+
+function mapToObject(map) {
+  const result = {};
+  if (!map) return result;
+  map.forEach((value, key) => {
+    result[key] = value;
+  });
+  return result;
+}
+
+function serializeTelemetryEntry(entry, { includeLevels = false } = {}) {
+  if (!entry) {
+    return { banks: 0, relaxed: 0, tags: {}, sizeBuckets: {} };
+  }
+  const serialized = {
+    banks: entry.banks ?? 0,
+    relaxed: entry.relaxed ?? 0,
+    tags: mapToObject(entry.tags ?? new Map()),
+    sizeBuckets: mapToObject(entry.sizeBuckets ?? new Map()),
+  };
+  if (includeLevels && entry.levels) {
+    serialized.levels = mapToObject(entry.levels);
+  }
+  return serialized;
+}
+
+function serializeBankTelemetry(telemetry) {
+  if (!telemetry) return null;
+  return {
+    totals: {
+      banks: telemetry.totals.banks,
+      relaxed: telemetry.totals.relaxed,
+      untagged: telemetry.totals.untagged,
+      tags: mapToObject(telemetry.totals.tags),
+      sizeBuckets: mapToObject(telemetry.totals.sizeBuckets),
+    },
+    byLevel: Object.fromEntries(
+      Array.from(telemetry.byLevel.entries()).map(([level, entry]) => [
+        level,
+        serializeTelemetryEntry(entry),
+      ]),
+    ),
+    byPreset: Object.fromEntries(
+      Array.from(telemetry.byPreset.entries()).map(([preset, entry]) => [
+        preset,
+        serializeTelemetryEntry(entry, { includeLevels: true }),
+      ]),
+    ),
+  };
+}
 
 function readBooleanOption(options, key, defaultValue) {
   if (!options.has(key)) {
@@ -456,23 +670,43 @@ function getFamilyConfusables(context, slot) {
   if (!slot.anchor) {
     return [];
   }
-  const families = confusables.collocationFamilies ?? {};
-  const key = `${slot.anchor}(N)`;
-  const family = families[key];
+  const directKey = `${slot.anchor}(N)`;
+  let family = COLLLOCATION_FAMILY_INDEX.get(directKey);
+  if (!family) {
+    for (const entry of COLLLOCATION_FAMILY_INDEX.values()) {
+      if (entry.anchor === slot.anchor) {
+        family = entry;
+        break;
+      }
+    }
+  }
   if (!family) {
     return [];
   }
-  const bucket = family[slot.pos] ?? family["VERB"] ?? [];
-  return bucket
+  if (!levelMatches(family.levels, context.level)) {
+    return [];
+  }
+  const entries = family.entries ?? {};
+  const slotKey = slot.pos && entries[slot.pos] ? slot.pos : null;
+  const bucket = slotKey
+    ? entries[slotKey]
+    : entries["VERB"] || entries["ADJ"] || entries["NOUN"] || [];
+  return (Array.isArray(bucket) ? bucket : [])
     .filter((lemma) => lemma && lemma.toLowerCase() !== context.answerLemma)
-    .map((lemma) => ({
-      surface: matchCasing(context.answerSurface, lemma),
-      lemma,
-      pos: slot.pos,
-      source: "family",
-      tags: new Set(["family", "colloc"]),
-      group: key,
-    }));
+    .map((lemma) => {
+      const tags = new Set(["family", "colloc"]);
+      if (family.theme) {
+        tags.add(`theme:${family.theme}`);
+      }
+      return {
+        surface: matchCasing(context.answerSurface, lemma),
+        lemma,
+        pos: slot.pos,
+        source: "family",
+        tags,
+        group: family.id,
+      };
+    });
 }
 
 function getPresetFamilyConfusables(context, slot) {
@@ -480,24 +714,29 @@ function getPresetFamilyConfusables(context, slot) {
   if (extras.length === 0) {
     return [];
   }
-  const families = confusables.collocationFamilies ?? {};
   const results = [];
   extras.forEach((key) => {
     if (!key || typeof key !== "string") return;
-    const family = families[key];
+    const family = COLLLOCATION_FAMILY_INDEX.get(key);
     if (!family) return;
-    const bucket = family[slot.pos] ?? family["VERB"] ?? [];
-    bucket.forEach((lemma) => {
+    if (!levelMatches(family.levels, context.level)) return;
+    const entries = family.entries ?? {};
+    const bucket = entries[slot.pos] ?? entries["VERB"] ?? [];
+    (Array.isArray(bucket) ? bucket : []).forEach((lemma) => {
       if (!lemma) return;
       const lower = lemma.toLowerCase();
       if (lower === context.answerLemma) return;
+      const tags = new Set(["family", "colloc", "preset"]);
+      if (family.theme) {
+        tags.add(`theme:${family.theme}`);
+      }
       results.push({
         surface: matchCasing(context.answerSurface, lemma),
         lemma,
         pos: slot.pos,
         source: "family",
-        tags: new Set(["family", "colloc", "preset"]),
-        group: key,
+        tags,
+        group: family.id,
       });
     });
   });
@@ -840,21 +1079,28 @@ function generateCuratedConfusables(context) {
     return results;
   }
 
-  const synonymSets = {
-    VERB: confusables.verbSynonymSets,
-    ADJ: confusables.adjSynonymSets,
-    NOUN: confusables.nounSynonymSets,
-    ADV: confusables.advSynonymSets,
-  };
-  const sets = synonymSets[context.expectedPos] ?? [];
-  sets.forEach((set, index) => {
-    if (!Array.isArray(set)) return;
-    if (!set.includes(answerLower)) return;
-    set.forEach((word) => pushCandidate(word, { pos: context.expectedPos, group: `curated:${context.expectedPos}:${index}` }));
+  const curatedSets = CURATED_SET_INDEX.get(context.expectedPos) ?? [];
+  curatedSets.forEach((entry) => {
+    if (!levelMatches(entry.levels, context.level)) return;
+    if (!entry.wordsLower.includes(answerLower)) return;
+    const tagList = entry.theme ? [`theme:${entry.theme}`] : [];
+    entry.words.forEach((word) =>
+      pushCandidate(word, {
+        pos: context.expectedPos,
+        group: `curated:${entry.id}`,
+        tags: tagList,
+      }),
+    );
   });
 
-  if (context.expectedPos === "VERB") {
-    confusables.lightVerbs.forEach((word) => pushCandidate(word, { pos: "VERB", group: "light-verbs" }));
+  if (
+    context.expectedPos === "VERB" &&
+    Array.isArray(confusables.lightVerbs) &&
+    confusables.lightVerbs.includes(answerLower)
+  ) {
+    confusables.lightVerbs.forEach((word) =>
+      pushCandidate(word, { pos: "VERB", group: "light-verbs", tags: ["light-verb"] }),
+    );
   }
 
   return results;
@@ -1087,9 +1333,6 @@ function buildSmartBank(context, collocationIndex, lemmaFreqMap, bankSize, seed)
   if (usedRelaxor) {
     tags.add("relaxed");
   }
-  if (context.presetId) {
-    tags.add("preset");
-  }
   const tagList = Array.from(tags.values()).sort();
   const quality = qualityLabel({
     bank: deduped,
@@ -1300,6 +1543,7 @@ function buildGapfillRows({
   packCooldown.clear();
   const rows = [];
   const seenPrompts = new Set();
+  const bankTelemetry = createBankTelemetry();
   const gapfillPreset =
     preset && Array.isArray(preset.exerciseTypes) && preset.exerciseTypes.includes("gapfill")
       ? preset
@@ -1445,6 +1689,15 @@ function buildGapfillRows({
       bankSeed,
     );
 
+    const presetForTelemetry = typeof meta.preset === "string" ? meta.preset : context.presetId;
+    recordBankTelemetry(bankTelemetry, {
+      level,
+      presetId: presetForTelemetry,
+      tags: new Set(Array.isArray(meta.tags) ? meta.tags : []),
+      bankSize: bank.length,
+      usedRelax: meta.usedRelax === true,
+    });
+
     const hintsParts = [];
     const hintConfig = presetGapFillConfig?.hints;
     const includeInitial = hintConfig ? hintConfig.initialLetter === true : true;
@@ -1519,7 +1772,7 @@ function buildGapfillRows({
     if (limit && rows.length >= limit) break;
   }
 
-  return { rows, stats, dropSummary };
+  return { rows, stats, dropSummary, telemetry: serializeBankTelemetry(bankTelemetry) };
 }
 
 function buildMatchingRows({ cards, level, limit, filterConfig }) {
@@ -1965,10 +2218,11 @@ function logSummary({ gapfill, matching, mcq, scramble, outputDir }, extras = {}
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  const levelRaw = opts.get("--level") ?? "A2";
+  const level = String(levelRaw).toUpperCase();
   const cardsPath = opts.get("--cards")
     ? path.resolve(opts.get("--cards"))
-    : path.resolve(process.cwd(), "cards/draft_cards.jsonl");
-  const level = opts.get("--level") ?? "A2";
+    : path.resolve(process.cwd(), `cards/draft_cards_${level}.jsonl`);
   const outDir = opts.get("--outDir")
     ? path.resolve(opts.get("--outDir"))
     : path.resolve(process.cwd(), `public/packs/${level}`);
@@ -1988,7 +2242,7 @@ async function main() {
   }
   let sfwLevel = sfwLevelRaw;
   if (!sfwLevel || !["off", "default", "strict"].includes(sfwLevel)) {
-    sfwLevel = "default";
+    sfwLevel = "strict";
   }
   const dropProperNouns = readBooleanOption(opts, "--dropProperNouns", true);
   const acronymMinLen = toNumber(opts.get("--acronymMinLen")) ?? 3;
@@ -2099,6 +2353,7 @@ async function main() {
   summaryExtras.pairsFilteredByGuards = matching.stats.pairsFilteredByGuards;
   summaryExtras.scrambleEmitted = scramble.stats.emitted;
   summaryExtras.preset = preset?.id ?? null;
+  summaryExtras.bankTelemetry = gapfill.telemetry ?? null;
 
   logSummary({
     gapfill: gapfill.stats,

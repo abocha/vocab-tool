@@ -14,6 +14,7 @@ Cheap heuristics to flag low-quality items and protect the learner experience.
 - **Toxicity/basic safety**: banned list; skip sensitive topics.
 - **Attribution presence**: `source` and `license` non-empty.
 - **Bank hygiene** (gap-fill): options unique, POS/morph match the slot, no stray stopwords unless grammar mode, bank size ≥ minimum, answer present; relaxor usage tracked.
+- **Matching shape**: each row must be a single pair (`left,right`). Legacy set-per-row rows are rejected as `invalid_format` and reported in the summary.
 - **Near-duplicates**: fuzzy match prompts/options to spot near-identical items for review.
 
 ### Telemetry
@@ -21,6 +22,7 @@ Cheap heuristics to flag low-quality items and protect the learner experience.
 - Bank counts per file and globally.
 - Relaxed-bank usage (how often the fallback fired).
 - Tag mix (`colloc`, `neighbor`, `curated`, `family`, etc.).
+- Per-level and per-preset aggregation (counts, tag mix, size histogram) sourced from `bank_meta`.
 - Bank-size histogram to keep pack settings honest.
 
 ### Gap-Fill Specific

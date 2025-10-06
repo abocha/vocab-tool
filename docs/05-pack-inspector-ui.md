@@ -21,6 +21,13 @@ Provide a lightweight review layer inside the app to curate packs for a session.
 - Difficulty: A1 / A2 / B1 (sets Zipf band + defaults)
 - Max blanks per sentence: 1-2
 
+### Bank Telemetry (Phase 2)
+
+- Inspector list now surfaces bank tags (family/colloc/neighbor/curated) alongside slot signatures.
+- The CLI summary from `cards-to-packs` exposes `bankTelemetry` with totals by level and preset (counts, tag mix, relaxed usage, bank-size histogram).
+- Use this data to spot thin presets (e.g., relaxor > 10% or missing family/confusable tags) before shipping.
+- “Only banks with relaxed distractors” filter remains the quickest way to audit fallback usage in the UI.
+
 ## Presets
 
 - Presets capture: filters, seed, pairs-per-set, gap controls (mode, bank size, hints, difficulty).

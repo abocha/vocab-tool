@@ -69,9 +69,11 @@ The Phase 2 pipeline turns the SimpleWiki corpus into reusable cards and then em
 
 ### Current Highlights (2025-03)
 
-- **Smart Bank v1.1**: gap-fill banks now use slot-aware candidate staging, with telemetry showing distractor sources and bank sizes. A2/B1 short-bank counts are <25.
+- **Smart Bank v1.1**: gap-fill banks now use slot-aware candidate staging, with curated sets organised by level/theme and preset-aware telemetry in the CLI summary.
+- **Preset telemetry**: `cards-to-packs` surfaces `bankTelemetry` (per level & preset) so content teams can spot thin banks before export.
+- **Matching deprecation removed**: only pair-per-row CSVs are accepted; legacy set-per-row files are rejected with actionable validator errors.
 - **Scramble hygiene**: numeric-heavy sentences are filtered before shuffling, so answers no longer reveal hidden numbers.
-- **Validator telemetry**: `npm run packs:validate` reports bank tag mix, relaxed usage, and size histograms to catch regressions quickly.
+- **Validator telemetry**: `npm run packs:validate` reports tag mix, size histograms, and preset coverage to catch regressions quickly.
 
 ```bash
 # 1) Derive draft cards (examples + collocations) for a level
@@ -84,7 +86,7 @@ npm run packs:from-cards -- --level A2 --limitGapfill 1200 --limitMatching 800 -
 npm run packs:validate -- --dir public/packs/A2 --type auto
 ```
 
-- `cards/draft_cards.jsonl` stores one JSON object per line with the schema described in `/docs/06-cards-data-model.md`.
+- `cards/draft_cards_<LEVEL>.jsonl` stores one JSON object per line with the schema described in `/docs/06-cards-data-model.md`.
 - The pack builders keep the same column headers and shapes defined in `/docs/03-csv-pack-spec.md`, and every CSV export is written with a UTF-8 BOM so Excel opens them without mangling characters.
 - The validator CLI summarises totals, drops, and heuristic warnings per file; it exits non-zero only when a file is unreadable or missing required headers.
 - Filtering heuristics strip named entities, unsafe phrases, short acronyms, formula stubs, and (optionally) sexual vocabulary. Tweak the lists under `filter-lists/` or toggle behaviour with `--sfwLevel`, `--sfwAllow`, `--dropProperNouns`, `--acronymMinLen`, and related flags.
@@ -114,12 +116,12 @@ For the full CLI option reference (including safety filters and presets) see
 - `npm run preview` — preview the production build locally.
 - `npm run lint` — run ESLint across the project.
 - `npm run prepare:packs` — copy/sample CSV packs (see above).
-- `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (defaults to `--level A2`).
-- `npm run cards:draft:strict` — convenience wrapper for `cards:draft` with the school-safe guard profile.
-- `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards (defaults to `--level A2`).
-- `npm run packs:from-cards:strict` — convenience wrapper for `packs:from-cards` with strict safety guards.
-- `npm run packs:validate` — run the pack validator summary over one or more levels.
-- `npm run packs:validate:strict` — validator in school-safe mode with strict exit on guard hits.
+- `npm run cards:draft` — derive draft cards from the SimpleWiki corpus (defaults to `--level A2`, writes `cards/draft_cards_<LEVEL>.jsonl`, SFW level **strict** by default).
+- `npm run cards:draft:strict` — legacy alias (same as `cards:draft`; kept for backwards compatibility).
+- `npm run packs:from-cards` — build deterministic gap-fill, matching, and MCQ CSVs from the draft cards (reads `cards/draft_cards_<LEVEL>.jsonl`, writes `public/packs/<LEVEL>`, defaults to strict guards).
+- `npm run packs:from-cards:strict` — legacy alias for the default strict run.
+- `npm run packs:validate` — run the pack validator summary (defaults to strict guards and `public/packs/<LEVEL>` when `--level` is supplied).
+- `npm run packs:validate:strict` — legacy alias for the default strict validator run.
 - `npm run packs:convert:matching` — convert a legacy set-per-row matching CSV into the canonical pair-per-row format.
 - `npm run test` — run the Vitest unit suites (single-threaded pool).
 
@@ -127,24 +129,23 @@ For the full CLI option reference (including safety filters and presets) see
 
 All build/validate CLIs accept `--sfwLevel` to control the guardrails:
 
+By default the scripts run in **strict** mode, so you now only need to specify `--level` unless you
+want to relax the filters:
+
 ```bash
-# School-safe (sexual vocabulary removed unless allow-listed)
-node scripts/corpus-to-cards.js --level A2 --tokens ./.codex-local/corpus/simplewiki/data/tokens.csv.gz \
-  --out cards/draft_cards.jsonl --sfwLevel strict --dropProperNouns on
+# Default (strict) run
+node scripts/corpus-to-cards.js --level B1
+node scripts/cards-to-packs.js --level B1
+node scripts/packs-validate.js --level B1
 
-node scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 \
-  --outDir public/packs/A2 --sfwLevel strict
-
-node scripts/packs-validate.js --dir public/packs/A2 --type auto --sfwLevel strict --strict
-
-# Mature / default filtering
-node scripts/cards-to-packs.js --cards cards/draft_cards.jsonl --level A2 --sfwLevel default
+# Relaxed guard profile
+node scripts/cards-to-packs.js --level B1 --sfwLevel default
 
 # Disable SFW filtering entirely
-node scripts/corpus-to-cards.js --level A2 --sfwLevel off
+node scripts/corpus-to-cards.js --level B1 --sfwLevel off
 
 # Allow-list specific terms when running in strict mode
-node scripts/packs-validate.js --dir public/packs/A2 --sfwLevel strict --sfwAllow ./filter-lists/sfw-allow.txt
+node scripts/packs-validate.js --level B1 --sfwAllow ./filter-lists/sfw-allow.txt
 ```
 
 Lists live under `filter-lists/` and can be customised per team/project. The validator reports guard hits under the `filters` section; combine `--sfwLevel strict` with `--strict` to fail the build when any guarded terms remain.

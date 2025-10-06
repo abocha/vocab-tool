@@ -124,6 +124,7 @@ function parseArgs(argv) {
   const packs = [];
   let dir = null;
   let type = "auto";
+  let level = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
@@ -145,10 +146,16 @@ function parseArgs(argv) {
         type = value.toLowerCase();
         i += 1;
       }
+    } else if (token === "--level") {
+      const value = argv[i + 1];
+      if (value && !value.startsWith("--")) {
+        level = value;
+        i += 1;
+      }
     }
   }
 
-  return { packs, dir, type };
+  return { packs, dir, type, level };
 }
 
 function safeString(value) {
@@ -196,16 +203,52 @@ function mapToObject(map, { numeric = false } = {}) {
   return result;
 }
 
+function normalizeLevel(value) {
+  if (!value) return "";
+  return String(value).toUpperCase();
+}
+
 function serializeTelemetry(telemetry) {
   if (!telemetry) {
     return null;
   }
+
+  const serializeEntry = (entry, { includeLevels = false } = {}) => {
+    if (!entry) {
+      return { banks: 0, relaxed: 0, tags: {}, sizeBuckets: {} };
+    }
+    const serialized = {
+      banks: entry.banks ?? 0,
+      relaxed: entry.relaxed ?? 0,
+      tags: mapToObject(entry.tags ?? new Map()),
+      sizeBuckets: mapToObject(entry.sizeBuckets ?? new Map(), { numeric: true }),
+    };
+    if (includeLevels && entry.levels) {
+      serialized.levels = mapToObject(entry.levels, { numeric: true });
+    }
+    return serialized;
+  };
+
   return {
-    banks: telemetry.banks ?? 0,
-    relaxed: telemetry.relaxed ?? 0,
-    untagged: telemetry.untagged ?? 0,
-    tagCounts: mapToObject(telemetry.tagCounts, { numeric: false }),
-    sizeBuckets: mapToObject(telemetry.sizeBuckets, { numeric: true }),
+    totals: {
+      banks: telemetry.totals?.banks ?? 0,
+      relaxed: telemetry.totals?.relaxed ?? 0,
+      untagged: telemetry.totals?.untagged ?? 0,
+      tags: mapToObject(telemetry.totals?.tags ?? new Map()),
+      sizeBuckets: mapToObject(telemetry.totals?.sizeBuckets ?? new Map(), { numeric: true }),
+    },
+    byLevel: Object.fromEntries(
+      Array.from((telemetry.byLevel ?? new Map()).entries()).map(([level, entry]) => [
+        level,
+        serializeEntry(entry),
+      ]),
+    ),
+    byPreset: Object.fromEntries(
+      Array.from((telemetry.byPreset ?? new Map()).entries()).map(([preset, entry]) => [
+        preset,
+        serializeEntry(entry, { includeLevels: true }),
+      ]),
+    ),
   };
 }
 
@@ -275,14 +318,132 @@ function createGapfillState() {
       bankMorph: 0,
     },
     seen: new Set(),
-    telemetry: {
+    telemetry: createGapfillTelemetryTracker(),
+  };
+}
+
+function createGapfillTelemetryTracker() {
+  return {
+    totals: {
       banks: 0,
       relaxed: 0,
-      tagCounts: new Map(),
-      sizeBuckets: new Map(),
       untagged: 0,
+      tags: new Map(),
+      sizeBuckets: new Map(),
     },
+    byLevel: new Map(),
+    byPreset: new Map(),
   };
+}
+
+function ensureGapfillTelemetryEntry(map, key, { trackLevels = false } = {}) {
+  if (!map.has(key)) {
+    map.set(key, {
+      banks: 0,
+      relaxed: 0,
+      tags: new Map(),
+      sizeBuckets: new Map(),
+      levels: trackLevels ? new Map() : undefined,
+    });
+  }
+  return map.get(key);
+}
+
+function recordGapfillTelemetry(telemetry, { level, presetId, tags, bankSize, usedRelax }) {
+  if (!telemetry) return;
+  const normalizedLevel = normalizeLevel(level) || "UNKNOWN";
+  const sizeKey = String(bankSize ?? 0);
+  const totals = telemetry.totals;
+  const tagSet = tags instanceof Set ? tags : new Set(tags ?? []);
+  const effectiveTags = Array.from(tagSet).filter((tag) => tag && tag !== "preset");
+
+  totals.banks += 1;
+  totals.sizeBuckets.set(sizeKey, (totals.sizeBuckets.get(sizeKey) ?? 0) + 1);
+  if (effectiveTags.length === 0) {
+    totals.untagged += 1;
+  } else {
+    effectiveTags.forEach((tag) => {
+      totals.tags.set(tag, (totals.tags.get(tag) ?? 0) + 1);
+    });
+  }
+  if (usedRelax) {
+    totals.relaxed += 1;
+  }
+
+  const levelEntry = ensureGapfillTelemetryEntry(telemetry.byLevel, normalizedLevel);
+  levelEntry.banks += 1;
+  levelEntry.sizeBuckets.set(sizeKey, (levelEntry.sizeBuckets.get(sizeKey) ?? 0) + 1);
+  effectiveTags.forEach((tag) => {
+    levelEntry.tags.set(tag, (levelEntry.tags.get(tag) ?? 0) + 1);
+  });
+  if (usedRelax) {
+    levelEntry.relaxed += 1;
+  }
+
+  if (presetId) {
+    const presetEntry = ensureGapfillTelemetryEntry(telemetry.byPreset, presetId, { trackLevels: true });
+    presetEntry.banks += 1;
+    presetEntry.sizeBuckets.set(sizeKey, (presetEntry.sizeBuckets.get(sizeKey) ?? 0) + 1);
+    effectiveTags.forEach((tag) => {
+      presetEntry.tags.set(tag, (presetEntry.tags.get(tag) ?? 0) + 1);
+    });
+    if (usedRelax) {
+      presetEntry.relaxed += 1;
+    }
+    if (presetEntry.levels) {
+      presetEntry.levels.set(
+        normalizedLevel,
+        (presetEntry.levels.get(normalizedLevel) ?? 0) + 1,
+      );
+    }
+  }
+}
+
+function mergeCountObject(target, source) {
+  if (!source) return;
+  Object.entries(source).forEach(([key, value]) => {
+    const numericValue = Number(value ?? 0);
+    target[key] = (target[key] ?? 0) + numericValue;
+  });
+}
+
+function mergeBankTelemetry(target, source) {
+  if (!source) return target;
+  if (!target) {
+    return JSON.parse(JSON.stringify(source));
+  }
+
+  target.totals = target.totals || { banks: 0, relaxed: 0, untagged: 0, tags: {}, sizeBuckets: {} };
+  target.totals.banks += source.totals?.banks ?? 0;
+  target.totals.relaxed += source.totals?.relaxed ?? 0;
+  target.totals.untagged += source.totals?.untagged ?? 0;
+  mergeCountObject(target.totals.tags, source.totals?.tags ?? {});
+  mergeCountObject(target.totals.sizeBuckets, source.totals?.sizeBuckets ?? {});
+
+  target.byLevel = target.byLevel || {};
+  Object.entries(source.byLevel ?? {}).forEach(([level, entry]) => {
+    if (!target.byLevel[level]) {
+      target.byLevel[level] = { banks: 0, relaxed: 0, tags: {}, sizeBuckets: {} };
+    }
+    target.byLevel[level].banks += entry.banks ?? 0;
+    target.byLevel[level].relaxed += entry.relaxed ?? 0;
+    mergeCountObject(target.byLevel[level].tags, entry.tags ?? {});
+    mergeCountObject(target.byLevel[level].sizeBuckets, entry.sizeBuckets ?? {});
+  });
+
+  target.byPreset = target.byPreset || {};
+  Object.entries(source.byPreset ?? {}).forEach(([preset, entry]) => {
+    if (!target.byPreset[preset]) {
+      target.byPreset[preset] = { banks: 0, relaxed: 0, tags: {}, sizeBuckets: {}, levels: {} };
+    }
+    target.byPreset[preset].banks += entry.banks ?? 0;
+    target.byPreset[preset].relaxed += entry.relaxed ?? 0;
+    mergeCountObject(target.byPreset[preset].tags, entry.tags ?? {});
+    mergeCountObject(target.byPreset[preset].sizeBuckets, entry.sizeBuckets ?? {});
+    mergeCountObject(target.byPreset[preset].levels, entry.levels ?? {});
+  });
+
+  return target;
 }
 
 function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
@@ -408,21 +569,13 @@ function evaluateGapfillRow(row, state, filterConfig, filterSummary) {
 
   const telemetry = state.telemetry;
   if (telemetry) {
-    telemetry.banks += 1;
-    const sizeKey = String(bankOptions.length);
-    telemetry.sizeBuckets.set(sizeKey, (telemetry.sizeBuckets.get(sizeKey) ?? 0) + 1);
-    const tags = Array.isArray(bankMeta?.tags) ? bankMeta.tags : null;
-    if (tags && tags.length > 0) {
-      tags.forEach((tag) => {
-        if (!tag) return;
-        telemetry.tagCounts.set(tag, (telemetry.tagCounts.get(tag) ?? 0) + 1);
-      });
-    } else {
-      telemetry.untagged += 1;
-    }
-    if (bankMeta && bankMeta.usedRelax === true) {
-      telemetry.relaxed += 1;
-    }
+    recordGapfillTelemetry(telemetry, {
+      level,
+      presetId: typeof bankMeta?.preset === "string" ? bankMeta.preset : null,
+      tags: new Set(Array.isArray(bankMeta?.tags) ? bankMeta.tags : []),
+      bankSize: bankOptions.length,
+      usedRelax: bankMeta && bankMeta.usedRelax === true,
+    });
   }
 
   const reconstructed = prompt.includes("_____")
@@ -838,9 +991,11 @@ function formatSummary(results, combinedFilters, aggregatedTelemetry) {
 }
 
 async function main() {
-  const { packs, dir, type } = parseArgs(process.argv.slice(2));
+  const parsed = parseArgs(process.argv.slice(2));
+  const { packs, dir, type, level: cliLevel } = parsed;
   const forcedType = type !== "auto" ? type : null;
   const singlePackMode = packs.length > 0;
+  const normalizedLevel = cliLevel ? String(cliLevel).toUpperCase() : null;
 
   const optionMap = new Map();
   const argv = process.argv.slice(2);
@@ -857,7 +1012,7 @@ async function main() {
   }
   let sfwLevel = sfwLevelRaw;
   if (!sfwLevel || !["off", "default", "strict"].includes(sfwLevel)) {
-    sfwLevel = "default";
+    sfwLevel = "strict";
   }
   const dropProperNouns = readBooleanOption(optionMap, "--dropProperNouns", true);
   const strict = readBooleanOption(optionMap, "--strict", false);
@@ -880,7 +1035,12 @@ async function main() {
     sfwAllowPath,
   });
 
-  const collected = await collectFiles({ packs, dir });
+  const defaultDir = normalizedLevel
+    ? path.resolve(process.cwd(), `public/packs/${normalizedLevel}`)
+    : path.resolve(process.cwd(), "public/packs/A2");
+  const resolvedDir = dir ? path.resolve(dir) : defaultDir;
+
+  const collected = await collectFiles({ packs, dir: resolvedDir });
   if (collected.error) {
     console.error(collected.error);
     process.exitCode = 1;
@@ -894,13 +1054,7 @@ async function main() {
 
   const results = [];
   const combinedFilterSummary = {};
-  const aggregatedTelemetry = {
-    banks: 0,
-    relaxed: 0,
-    untagged: 0,
-    tagCounts: new Map(),
-    sizeBuckets: new Map(),
-  };
+  let aggregatedTelemetry = null;
   for (const filePath of fileList) {
     const inferred = inferType(filePath);
     if (forcedType && !singlePackMode && inferred && inferred !== forcedType) {
@@ -925,32 +1079,12 @@ async function main() {
       mergeDropSummaries(combinedFilterSummary, analysis.filterSummary);
     }
     if (analysis.telemetry) {
-      aggregatedTelemetry.banks += analysis.telemetry.banks ?? 0;
-      aggregatedTelemetry.relaxed += analysis.telemetry.relaxed ?? 0;
-      aggregatedTelemetry.untagged += analysis.telemetry.untagged ?? 0;
-      const tagCounts = analysis.telemetry.tagCounts ?? {};
-      for (const [tag, count] of Object.entries(tagCounts)) {
-        aggregatedTelemetry.tagCounts.set(tag, (aggregatedTelemetry.tagCounts.get(tag) ?? 0) + (count ?? 0));
-      }
-      const sizeBuckets = analysis.telemetry.sizeBuckets ?? {};
-      for (const [bucket, count] of Object.entries(sizeBuckets)) {
-        aggregatedTelemetry.sizeBuckets.set(bucket, (aggregatedTelemetry.sizeBuckets.get(bucket) ?? 0) + (count ?? 0));
-      }
+      aggregatedTelemetry = mergeBankTelemetry(aggregatedTelemetry, analysis.telemetry);
     }
     results.push(analysis);
   }
 
-  const aggregatedPlain = aggregatedTelemetry.banks > 0
-    ? {
-        banks: aggregatedTelemetry.banks,
-        relaxed: aggregatedTelemetry.relaxed,
-        untagged: aggregatedTelemetry.untagged,
-        tagCounts: mapToObject(aggregatedTelemetry.tagCounts, { numeric: false }),
-        sizeBuckets: mapToObject(aggregatedTelemetry.sizeBuckets, { numeric: true }),
-      }
-    : null;
-
-  const summary = formatSummary(results, combinedFilterSummary, aggregatedPlain);
+  const summary = formatSummary(results, combinedFilterSummary, aggregatedTelemetry);
   summary.sfwLevel = filterConfig.sfwLevel;
   console.log(JSON.stringify(summary, null, 2));
 
